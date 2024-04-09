@@ -1,5 +1,6 @@
 .idea
 examples/*_override.tf
+examples/*/*.tfstate*
 
 *~*
 *.bak
