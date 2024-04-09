@@ -1,0 +1,36 @@
+# golangci-lint run -E paralleltest,bodyclose,gocritic,godot,godox,gofmt,goimports,goconst,ginkgolinter,perfsprint,revive,thelper
+run:
+  tests: true
+linters-settings:
+  revive:
+    enable-all-rules: true
+    rules:
+      - name: add-constant
+        disabled: true
+      - name: cognitive-complexity
+        disabled: true
+      - name: cyclomatic
+        disabled: true
+      - name: function-length
+        disabled: true
+      - name: line-length-limit
+        disabled: true
+      - name: var-naming
+        arguments:
+          - []
+          - []
+  staticcheck:
+    checks: ["all"]
+linters:
+  enable:
+    - bodyclose
+    - ginkgolinter
+    - goconst
+    - gocritic
+    - godot
+    - godox
+    - gofmt
+    - goimports
+    - perfsprint
+    - revive
+    - thelper
