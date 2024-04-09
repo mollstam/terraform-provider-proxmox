@@ -13,7 +13,7 @@ provider "proxmox" {
     tls_insecure = true
 }
 
-resource "proxmox_vm_qemu" "example" {
+resource "proxmox_vm" "example" {
     node = "pve"
     name = "alice"
 }

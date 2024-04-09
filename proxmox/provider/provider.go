@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -13,9 +14,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
-	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
+	pschema "github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
-	resSchema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	rschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -24,7 +25,7 @@ import (
 )
 
 const defaultTLSInsecure = false
-const defaultTimeout = 10
+const defaultTimeout = 60
 const defaultDebug = false
 
 func New(version string) func() provider.Provider {
@@ -41,7 +42,7 @@ type proxmoxProvider struct {
 
 type proxmoxProviderModel struct {
 	APIURL         types.String `tfsdk:"api_url"`
-	APITokenId     types.String `tfsdk:"api_token_id"`
+	APITokenID     types.String `tfsdk:"api_token_id"`
 	APITokenSecret types.String `tfsdk:"api_token_secret"`
 	TLSInsecure    types.Bool   `tfsdk:"tls_insecure"`
 	HTTPHeaders    types.String `tfsdk:"http_headers"`
@@ -49,48 +50,48 @@ type proxmoxProviderModel struct {
 	Debug          types.Bool   `tfsdk:"debug"`
 }
 
-func (p *proxmoxProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
+func (p *proxmoxProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = "proxmox"
 	resp.Version = p.version
 }
 
-func (p *proxmoxProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
-	resp.Schema = schema.Schema{
+func (*proxmoxProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
+	resp.Schema = pschema.Schema{
 		Description: "Interact with Proxmox VE",
-		Attributes: map[string]schema.Attribute{
-			"api_url": resSchema.StringAttribute{
+		Attributes: map[string]pschema.Attribute{
+			"api_url": rschema.StringAttribute{
 				Required: true,
 				Validators: []validator.String{
 					URLValidator("you must specify a valid endpoint for the Proxmox Virtual Environment API (https://host.fqdn:8006/api2/json)"),
 				},
 				Description: "https://host.fqdn:8006/api2/json",
 			},
-			"api_token_id": resSchema.StringAttribute{
+			"api_token_id": rschema.StringAttribute{
 				Optional:    true,
-				Description: "API TokenID e.g. root@pam!mytesttoken",
+				Description: "API token ID prefixed by full User ID e.g. name@realm!token",
 			},
-			"api_token_secret": resSchema.StringAttribute{
+			"api_token_secret": rschema.StringAttribute{
 				Optional:    true,
-				Description: "The secret uuid corresponding to a TokenID",
+				Description: "API token secret e.g. 3b5a972d-bdb2-4181-b8f2-e3cdb34b3b4f",
 				Sensitive:   true,
 			},
-			"tls_insecure": resSchema.BoolAttribute{
+			"tls_insecure": rschema.BoolAttribute{
 				Optional:    true,
 				Default:     booldefault.StaticBool(defaultTLSInsecure),
 				Computed:    true,
 				Description: "By default, every TLS connection is verified to be secure. This option allows terraform to proceed and operate on servers considered insecure. For example if you're connecting to a remote host and you do not have the CA cert that issued the proxmox api url's certificate.",
 			},
-			"http_headers": resSchema.StringAttribute{
+			"http_headers": rschema.StringAttribute{
 				Optional:    true,
 				Description: "Set custom http headers e.g. Key,Value,Key1,Value1",
 			},
-			"timeout": resSchema.Int64Attribute{
+			"timeout": rschema.Int64Attribute{
 				Optional:    true,
 				Default:     int64default.StaticInt64(defaultTimeout),
 				Computed:    true,
-				Description: "How many seconds to wait for operations for both provider and api-client, default is 20m",
+				Description: fmt.Sprintf("How many seconds to wait for tasks in Proxmox VE to complete, default is %d", defaultTimeout),
 			},
-			"debug": resSchema.BoolAttribute{
+			"debug": rschema.BoolAttribute{
 				Optional:    true,
 				Default:     booldefault.StaticBool(defaultDebug),
 				Computed:    true,
@@ -100,7 +101,7 @@ func (p *proxmoxProvider) Schema(ctx context.Context, req provider.SchemaRequest
 	}
 }
 
-func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+func (*proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
 	tflog.Debug(ctx, "Configuring Proxmox VE provider")
 
 	var config proxmoxProviderModel
@@ -119,10 +120,10 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 		)
 	}
 
-	if config.APITokenId.IsUnknown() {
+	if config.APITokenID.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("api_token_id"),
-			"Unknown Proxmox VE APITokenId",
+			"Unknown Proxmox VE API Token ID",
 			"The provider cannot create the API client as api_token_id is set to an unknown configuration value. "+
 				"Either target apply the source of the value first, set the value statically, or use the PVE_API_TOKEN_ID environment variable.",
 		)
@@ -131,7 +132,7 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 	if config.APITokenSecret.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("api_token_secret"),
-			"Unknown Proxmox VE APITokenSecret",
+			"Unknown Proxmox VE API Token Secret",
 			"The provider cannot create the API client as api_token_secret is set to an unknown configuration value. "+
 				"Either target apply the source of the value first, set the value statically, or use the PVE_API_TOKEN_SECRET environment variable.",
 		)
@@ -140,7 +141,7 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 	if config.TLSInsecure.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("tls_insecure"),
-			"Unknown Proxmox VE TLSInsecure",
+			"Unknown Proxmox VE TLS Insecure",
 			"The provider cannot create the API client as tls_insecure is set to an unknown configuration value. "+
 				"Either target apply the source of the value first, set the value statically, or use the PVE_TLS_INSECURE environment variable.",
 		)
@@ -149,7 +150,7 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 	if config.HTTPHeaders.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("http_headers"),
-			"Unknown Proxmox VE HTTPHeaders",
+			"Unknown Proxmox VE HTTP Headers",
 			"The provider cannot create the API client as http_headers is set to an unknown configuration value. "+
 				"Either target apply the source of the value first, set the value statically, or use the PVE_HTTP_HEADERS environment variable.",
 		)
@@ -177,29 +178,29 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 		return
 	}
 
-	api_url := os.Getenv("PVE_API_URL")
+	apiURL := os.Getenv("PVE_API_URL")
 	if !config.APIURL.IsNull() {
-		api_url = config.APIURL.ValueString()
+		apiURL = config.APIURL.ValueString()
 	}
 
-	api_token_id := os.Getenv("PVE_API_TOKEN_ID")
-	if !config.APITokenId.IsNull() {
-		api_token_id = config.APITokenId.ValueString()
+	apiTokenID := os.Getenv("PVE_API_TOKEN_ID")
+	if !config.APITokenID.IsNull() {
+		apiTokenID = config.APITokenID.ValueString()
 	}
 
-	api_token_secret := os.Getenv("PVE_API_TOKEN_SECRET")
+	apiTokenSecret := os.Getenv("PVE_API_TOKEN_SECRET")
 	if !config.APITokenSecret.IsNull() {
-		api_token_secret = config.APITokenSecret.ValueString()
+		apiTokenSecret = config.APITokenSecret.ValueString()
 	}
 
-	tls_insecure := GetenvOrDefaultBool("PVE_TLS_INSECURE", defaultTLSInsecure)
+	tlsInsecure := GetenvOrDefaultBool("PVE_TLS_INSECURE", defaultTLSInsecure)
 	if !config.TLSInsecure.IsNull() {
-		tls_insecure = config.TLSInsecure.ValueBool()
+		tlsInsecure = config.TLSInsecure.ValueBool()
 	}
 
-	http_headers := os.Getenv("PVE_HTTP_HEADERS")
+	httpHeaders := os.Getenv("PVE_HTTP_HEADERS")
 	if !config.HTTPHeaders.IsNull() {
-		http_headers = config.HTTPHeaders.ValueString()
+		httpHeaders = config.HTTPHeaders.ValueString()
 	}
 
 	timeout := GetenvOrDefaultInt64("PVE_TIMEOUT", defaultTimeout)
@@ -219,7 +220,7 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 		debug = config.Debug.ValueBool()
 	}
 
-	if api_token_id != "" && !strings.Contains(api_token_id, "!") {
+	if apiTokenID != "" && !strings.Contains(apiTokenID, "!") {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("api_token_id"),
 			"Malformed API Token ID",
@@ -231,15 +232,20 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 		return
 	}
 
-	ctx = tflog.SetField(ctx, "proxmox_api_url", api_url)
+	ctx = tflog.SetField(ctx, "proxmox_api_url", apiURL)
 	tflog.Debug(ctx, "Creating Proxmox API client")
 
+	tlsConf := &tls.Config{InsecureSkipVerify: true}
+	if !tlsInsecure {
+		tlsConf = nil
+	}
+
 	client, err := newProxmoxClient(
-		api_url,
-		api_token_id,
-		api_token_secret,
-		tls_insecure,
-		http_headers,
+		apiURL,
+		apiTokenID,
+		apiTokenSecret,
+		tlsConf,
+		httpHeaders,
 		int(timeout),
 		debug)
 
@@ -259,8 +265,7 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 		return
 	}
 
-	//permission check
-	minimum_permissions := []string{
+	minimumPermissions := []string{
 		"Datastore.AllocateSpace",
 		"Datastore.Audit",
 		"Pool.Allocate",
@@ -282,7 +287,7 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 		"VM.Monitor",
 		"VM.PowerMgmt",
 	}
-	id := strings.Split(api_token_id, "!")[0]
+	id := strings.Split(apiTokenID, "!")[0]
 	userID, err := pveapi.NewUserID(id)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -298,10 +303,10 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 		return
 	}
 	sort.Strings(permlist)
-	sort.Strings(minimum_permissions)
+	sort.Strings(minimumPermissions)
 
 	var permDiff []string
-	for _, str2 := range minimum_permissions {
+	for _, str2 := range minimumPermissions {
 		found := false
 		for _, str1 := range permlist {
 			if str2 == str1 {
@@ -326,64 +331,39 @@ func (p *proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureR
 	tflog.Debug(ctx, "Configured Proxmox VE provider", map[string]any{"success": true})
 }
 
-func (p *proxmoxProvider) Resources(ctx context.Context) []func() resource.Resource {
+func (*proxmoxProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
-		NewVmQemuResource,
-		/*func() resource.Resource {
-			return &resourceLxc{} // proxmox_lxc
-		},*/
-		/*func() resource.Resource {
-			return &resourceLxcDisk{} // proxmox_lxc_disk
-		},
-		func() resource.Resource {
-			return &resourcePool{} // proxmox_pool
-		},
-		func() resource.Resource {
-			return &resourceCloudInitDisk{} // proxmox_cloud_init_disk
-		},
-		func() resource.Resource {
-			return &resourceStorageIso{} // proxmox_storage_iso
-		},*/
+		NewVMResource,
 	}
 }
 
-func (p *proxmoxProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{
-		/*func() datasource.DataSource {
-			return &DataHAGroup{} // proxmox_ha_groups
-		},*/
-	}
+func (*proxmoxProvider) DataSources(_ context.Context) []func() datasource.DataSource {
+	return []func() datasource.DataSource{}
 }
 
-func newProxmoxClient(api_url string,
-	api_token_id string,
-	api_token_secret string,
-	tls_insecure bool,
-	http_headers string,
+func newProxmoxClient(apiURL string,
+	apiTokenID string,
+	apiTokenSecret string,
+	tlsConf *tls.Config,
+	httpHeaders string,
 	timeout int,
 	debug bool) (*pveapi.Client, error) {
-
-	tlsconf := &tls.Config{InsecureSkipVerify: true}
-	if !tls_insecure {
-		tlsconf = nil
-	}
-
 	var err error
-	if api_token_secret == "" {
-		err = fmt.Errorf("API token secret not provided, must exist")
+	if apiTokenSecret == "" {
+		err = errors.New("API token secret not provided, must exist")
 	}
 
-	if !strings.Contains(api_token_id, "!") {
-		err = fmt.Errorf("your API Token ID should contain a !, check your API credentials")
+	if !strings.Contains(apiTokenID, "!") {
+		err = errors.New("your API Token ID should contain a !, check your API credentials")
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	client, _ := pveapi.NewClient(api_url, nil, http_headers, tlsconf, "", timeout)
+	client, _ := pveapi.NewClient(apiURL, nil, httpHeaders, tlsConf, "", timeout)
 	*pveapi.Debug = debug
 
-	client.SetAPIToken(api_token_id, api_token_secret)
+	client.SetAPIToken(apiTokenID, apiTokenSecret)
 
 	return client, nil
 }
@@ -397,11 +377,12 @@ func GetenvOrDefaultBool(k string, dv bool) bool {
 
 func GetenvOrDefaultInt64(k string, dv int64) int64 {
 	if v := os.Getenv(k); v != "" {
-		if i, err := strconv.ParseInt(v, 10, 64); err != nil {
+		i, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
 			panic(err)
-		} else {
-			return i
 		}
+
+		return i
 	}
 	return dv
 }

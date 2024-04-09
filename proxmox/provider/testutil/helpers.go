@@ -1,15 +1,29 @@
 package testutil
 
 import (
+	"context"
 	"crypto/tls"
-	"fmt"
+	"errors"
 	"strings"
 
 	pveapi "github.com/Telmate/proxmox-api-go/proxmox"
+	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/terraform-plugin-log/tfsdklog"
 	"github.com/onsi/gomega"
 )
 
 var TestClient *pveapi.Client
+
+const (
+	apiURL         string = "https://192.168.56.102:8006/api2/json"
+	apiTokenID     string = "root@pam!tf"
+	apiTokenSecret string = "897d5216-64c1-4da8-b6dc-33eed34a34a0"
+	tlsInsecure    bool   = true
+	httpHeaders    string = ""
+	timeout        int    = 10
+	proxy          string = ""
+	debug          bool   = true
+)
 
 func init() {
 	client, err := newProxmoxTestClient()
@@ -22,39 +36,34 @@ func init() {
 	gomega.RegisterFailHandler(func(_ string, _ ...int) {
 		panic("gomega fail handler should not be used")
 	})
-
 }
 
 func newProxmoxTestClient() (*pveapi.Client, error) {
-	api_url := "https://192.168.56.102:8006/api2/json"
-	api_token_id := "root@pam!tf"
-	api_token_secret := "897d5216-64c1-4da8-b6dc-33eed34a34a0"
-	tls_insecure := true
-	http_headers := ""
-	timeout := 10
-	debug := true
-
 	tlsconf := &tls.Config{InsecureSkipVerify: true}
-	if !tls_insecure {
+	if !tlsInsecure {
 		tlsconf = nil
 	}
 
 	var err error
-	if api_token_secret == "" {
-		err = fmt.Errorf("API token secret not provided, must exist")
+	if apiTokenSecret == "" {
+		err = errors.New("API token secret not provided, must exist")
 	}
 
-	if !strings.Contains(api_token_id, "!") {
-		err = fmt.Errorf("your API Token ID should contain a !, check your API credentials")
+	if !strings.Contains(apiTokenID, "!") {
+		err = errors.New("your API Token ID should contain a !, check your API credentials")
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	client, _ := pveapi.NewClient(api_url, nil, http_headers, tlsconf, "", timeout)
+	client, _ := pveapi.NewClient(apiURL, nil, httpHeaders, tlsconf, proxy, timeout)
 	*pveapi.Debug = debug
 
-	client.SetAPIToken(api_token_id, api_token_secret)
+	client.SetAPIToken(apiTokenID, apiTokenSecret)
 
 	return client, nil
+}
+
+func GetTestLoggingContext() context.Context {
+	return tfsdklog.NewRootProviderLogger(context.Background(), tfsdklog.WithLogName("proxmox"), tfsdklog.WithLevel(hclog.Trace), tfsdklog.WithoutLocation())
 }

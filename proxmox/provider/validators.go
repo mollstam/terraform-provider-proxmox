@@ -15,7 +15,7 @@ type urlValidator struct {
 	description string
 }
 
-func (v urlValidator) Description(ctx context.Context) string {
+func (v urlValidator) Description(_ context.Context) string {
 	return v.description
 }
 
@@ -37,7 +37,6 @@ func (v urlValidator) ValidateString(ctx context.Context, request validator.Stri
 		_, err := url.ParseRequestURI(value.ValueString())
 		if err != nil {
 			invalid = true
-			return
 		}
 	}
 
