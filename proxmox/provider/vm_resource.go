@@ -36,10 +36,11 @@ type vmResource struct {
 }
 
 type vmResourceModel struct {
-	Node   types.String `tfsdk:"node"`
-	VMID   types.Int64  `tfsdk:"vmid"`
-	Name   types.String `tfsdk:"name"`
-	Status types.String `tfsdk:"status"`
+	Node        types.String `tfsdk:"node"`
+	VMID        types.Int64  `tfsdk:"vmid"`
+	Name        types.String `tfsdk:"name"`
+	Description types.String `tfsdk:"description"`
+	Status      types.String `tfsdk:"status"`
 }
 
 type VMStateMask uint8
@@ -60,7 +61,7 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 		Description: "This resource manages a Proxmox VM.",
 		Attributes: map[string]schema.Attribute{
 			"node": schema.StringAttribute{
-				Description: "The cluster node name",
+				Description: "The cluster node name.",
 				Required:    true,
 			},
 			"vmid": schema.Int64Attribute{
@@ -75,8 +76,12 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Description: "Set a name for the VM. Only used on the configuration web interface.",
 				Optional:    true,
 			},
+			"description": schema.StringAttribute{
+				Description: "Description for the VM. Shown in the web-interface VM's summary. This is saved as comment inside the configuration file.",
+				Optional:    true,
+			},
 			"status": schema.StringAttribute{
-				Description: "QEMU process status..",
+				Description: "QEMU process status.",
 				Optional:    true,
 				Computed:    true,
 				Default:     stringdefault.StaticString(stateRunning),
@@ -396,7 +401,18 @@ func UpdateResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Cl
 	if sm&VMStateConfig != 0 {
 		model.Node = types.StringValue(config.Node)
 		model.VMID = types.Int64Value(int64(config.VmID))
-		model.Name = types.StringValue(config.Name)
+
+		if config.Name == "" {
+			model.Name = types.StringNull()
+		} else {
+			model.Name = types.StringValue(config.Name)
+		}
+
+		if config.Description == "" {
+			model.Description = types.StringNull()
+		} else {
+			model.Description = types.StringValue(config.Description)
+		}
 	}
 	if sm&VMStateStatus != 0 {
 		model.Status = types.StringValue(status)
@@ -409,8 +425,9 @@ func UpdateResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Cl
 
 func apiConfigFromResourceModel(model *vmResourceModel, config *pveapi.ConfigQemu) {
 	// Node set via VmRef
-	config.Name = model.Name.ValueString()
 	// VMID set via VmRef
+	config.Name = model.Name.ValueString()
+	config.Description = model.Description.ValueString()
 }
 
 func getIDToUse(model *vmResourceModel, client *pveapi.Client) (id int, err error) {

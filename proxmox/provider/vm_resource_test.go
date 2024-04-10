@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	pveapi "github.com/Telmate/proxmox-api-go/proxmox"
+	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/mollstam/terraform-provider-proxmox/proxmox/provider/testutil"
@@ -26,15 +28,17 @@ func TestAccVMResource_CreateAndUpdate(t *testing.T) {
 resource "proxmox_vm" "test" {
 	node = "pve"
 	name = "wall-e"
+	description = "Waste Allocation Load Lifter: Earth-Class"
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, "pve", 100, "wall-e"),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("wall-e"), types.StringValue("Waste Allocation Load Lifter: Earth-Class")),
 					testCheckVMStatusInPve(&vm, "running"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "100"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "name", "wall-e"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "description", "Waste Allocation Load Lifter: Earth-Class"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
 				),
 			},
@@ -43,15 +47,46 @@ resource "proxmox_vm" "test" {
 resource "proxmox_vm" "test" {
 	node = "pve"
 	name = "m-o"
+	description = "Microbe-Obliterator"
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, "pve", 100, "m-o"),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator")),
 					testCheckVMStatusInPve(&vm, "running"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "100"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "name", "m-o"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "description", "Microbe-Obliterator"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccVMResource_CreateWithoutName_IsNullInState(t *testing.T) {
+	var vm vmResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test" {
+	node = "pve"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringNull(), types.StringNull()),
+					testCheckVMStatusInPve(&vm, "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "100"),
+					resource.TestCheckNoResourceAttr("proxmox_vm.test", "name"),
+					resource.TestCheckNoResourceAttr("proxmox_vm.test", "description"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
 				),
 			},
@@ -323,7 +358,7 @@ resource "proxmox_vm" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, "pve", 140, "wall-e"),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(140), types.StringValue("wall-e"), types.StringNull()),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "140"),
 				),
 			},
@@ -336,7 +371,7 @@ resource "proxmox_vm" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, "pve", 140, "wall-e"),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(140), types.StringValue("wall-e"), types.StringNull()),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "140"),
 				),
 			},
@@ -365,20 +400,13 @@ func testCheckVMExistsInPve(ctx context.Context, n string, r *vmResourceModel) r
 	}
 }
 
-func testCheckVMValuesInPve(r *vmResourceModel, node string, vmid int64, name string) resource.TestCheckFunc {
+func testCheckVMValuesInPve(r *vmResourceModel, node basetypes.StringValue, vmid basetypes.Int64Value, name basetypes.StringValue, description basetypes.StringValue) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		err := gomega.InterceptGomegaFailure(func() {
-			gomega.Expect(r.Node.IsUnknown()).To(gomega.BeFalseBecause("Node should be a known value"))
-			gomega.Expect(r.Node.IsNull()).To(gomega.BeFalseBecause("Node should not be null"))
-			gomega.Expect(r.Node.ValueString()).To(gomega.Equal(node))
-
-			gomega.Expect(r.VMID.IsUnknown()).To(gomega.BeFalseBecause("VMID should be a known value"))
-			gomega.Expect(r.VMID.IsNull()).To(gomega.BeFalseBecause("VMID should not be null"))
-			gomega.Expect(r.VMID.ValueInt64()).To(gomega.Equal(vmid))
-
-			gomega.Expect(r.Name.IsUnknown()).To(gomega.BeFalseBecause("Name should be a known value"))
-			gomega.Expect(r.Name.IsNull()).To(gomega.BeFalseBecause("Name should not be null"))
-			gomega.Expect(r.Name.ValueString()).To(gomega.Equal(name))
+			gomega.Expect(r.Node).To(gomega.Equal(node))
+			gomega.Expect(r.VMID).To(gomega.Equal(vmid))
+			gomega.Expect(r.Name).To(gomega.Equal(name))
+			gomega.Expect(r.Description).To(gomega.Equal(description))
 		})
 		if err != nil {
 			return err
