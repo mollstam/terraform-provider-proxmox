@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
@@ -40,7 +41,10 @@ type vmResourceModel struct {
 	VMID        types.Int64  `tfsdk:"vmid"`
 	Name        types.String `tfsdk:"name"`
 	Description types.String `tfsdk:"description"`
-	Status      types.String `tfsdk:"status"`
+
+	Status types.String `tfsdk:"status"`
+
+	Memory types.Int64 `tfsdk:"memory"`
 }
 
 type VMStateMask uint8
@@ -88,6 +92,12 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{stateStopped, stateRunning}...),
 				},
+			},
+			"memory": schema.Int64Attribute{
+				Description: "Memory in MB",
+				Optional:    true,
+				Computed:    true,
+				Default:     int64default.StaticInt64(16),
 			},
 		},
 	}
@@ -242,8 +252,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	ref := pveapi.NewVmRef(id)
 	ref.SetNode(plan.Node.ValueString())
 
-	// we probably want to pass false here in the future and reboot ourselves when update is completed (original provider does this, mentioning cloud-init)
-	_, err = config.Update(true, ref, r.client)
+	_, err = config.Update(false, ref, r.client)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating VM",
@@ -252,6 +261,39 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		return
 	}
 	tflog.Trace(ctx, fmt.Sprintf("VM %d updated", id))
+
+	reboot, err := pveapi.GuestHasPendingChanges(ref, r.client)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Updating VM",
+			"Unable to determine if VM needs reboot after updating it, unexpected error: "+err.Error(),
+		)
+		return
+	}
+	if reboot {
+		// RebootVm (ie POST ../status/reboot) hangs and never completes, probably because we're testing on VMs with nothing installed
+		tflog.Trace(ctx, fmt.Sprintf("Rebooting VM %d...", id))
+
+		_, err = r.client.StopVm(ref)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Updating VM",
+				"Could not stop VM as part of reboot after updating it, unexpected error: "+err.Error(),
+			)
+			return
+		}
+
+		_, err = r.client.StartVm(ref)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Updating VM",
+				"Could not start VM as part of reboot after updating it, unexpected error: "+err.Error(),
+			)
+			return
+		}
+
+		tflog.Trace(ctx, fmt.Sprintf("Rebooted VM %d.", id))
+	}
 
 	var state vmResourceModel
 	err = UpdateResourceModelFromAPI(ctx, id, r.client, &state, VMStateEverything)
@@ -413,6 +455,8 @@ func UpdateResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Cl
 		} else {
 			model.Description = types.StringValue(config.Description)
 		}
+
+		model.Memory = types.Int64Value(int64(config.Memory))
 	}
 	if sm&VMStateStatus != 0 {
 		model.Status = types.StringValue(status)
@@ -428,6 +472,8 @@ func apiConfigFromResourceModel(model *vmResourceModel, config *pveapi.ConfigQem
 	// VMID set via VmRef
 	config.Name = model.Name.ValueString()
 	config.Description = model.Description.ValueString()
+
+	config.Memory = int(model.Memory.ValueInt64())
 }
 
 func getIDToUse(model *vmResourceModel, client *pveapi.Client) (id int, err error) {
