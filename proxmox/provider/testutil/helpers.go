@@ -22,7 +22,7 @@ const (
 	httpHeaders    string = ""
 	timeout        int    = 10
 	proxy          string = ""
-	debug          bool   = true
+	debug          bool   = false
 )
 
 func init() {

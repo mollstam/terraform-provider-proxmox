@@ -202,6 +202,154 @@ resource "proxmox_vm" "test" {
 	})
 }
 
+func TestAccVMResource_ApplyOutOfBandModified_IsReconciledToPlan(t *testing.T) {
+	var vm vmResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test" {
+	node = "pve"
+	name = "wall-e"
+
+	memory = 36
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
+				),
+			},
+			{
+				PreConfig: setVMMemoryInPve(&vm, 30),
+				Config: providerConfig + `
+resource "proxmox_vm" "test" {
+	node = "pve"
+	name = "wall-e"
+
+	memory = 36
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("wall-e"), types.StringNull(), types.Int64Value(36)),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "36"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccVMResource_CreateCloneOfTemplate(t *testing.T) {
+	var vm vmResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	// we're using memory as a unique identifier here, expecting clone to have same non-default memory setting
+	template, err := createTemplateInPve(ctx, 200, "pve", 22)
+	if err != nil {
+		t.Error("Error during setup: " + err.Error())
+		return
+	}
+	cleanUpFunc := destroyVMInPve(template)
+	defer cleanUpFunc()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test_clone" {
+	node = "pve"
+	name = "m-o"
+	description = "Microbe-Obliterator"
+	
+	clone = 200
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test_clone", &vm),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(16)),
+					testCheckVMStatusInPve(&vm, "running"),
+					testCheckVMIsCloneOf(&vm, template),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "vmid", "100"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "name", "m-o"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "description", "Microbe-Obliterator"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "status", "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "clone", "200"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccVMResource_CreateAndUpdateToClone_ShouldBeRecreatedAsClone(t *testing.T) {
+	var vm vmResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	// we're using memory as a unique identifier here, expecting clone to have same non-default memory setting
+	template, err := createTemplateInPve(ctx, 200, "pve", 32)
+	if err != nil {
+		t.Error("Error during setup: " + err.Error())
+		return
+	}
+	cleanUpFunc := destroyVMInPve(template)
+	defer cleanUpFunc()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test_to_be_clone" {
+	node = "pve"
+	name = "m-o"
+	description = "Microbe-Obliterator"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test_to_be_clone", &vm),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(16)),
+					testCheckVMStatusInPve(&vm, "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "vmid", "100"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "name", "m-o"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "description", "Microbe-Obliterator"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "status", "running"),
+				),
+			},
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test_to_be_clone" {
+	node = "pve"
+	name = "m-o"
+	description = "Microbe-Obliterator"
+
+	clone = 200
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test_to_be_clone", &vm),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(16)),
+					testCheckVMStatusInPve(&vm, "running"),
+					testCheckVMIsCloneOf(&vm, template),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "vmid", "100"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "name", "m-o"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "description", "Microbe-Obliterator"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "status", "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "clone", "200"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccVMResource_ApplyOutOfBandStoppedVM_IsStarted(t *testing.T) {
 	var vm vmResourceModel
 
@@ -406,6 +554,25 @@ func testCheckVMExistsInPve(ctx context.Context, n string, r *vmResourceModel) r
 	}
 }
 
+func testCheckVMIsCloneOf(_ *vmResourceModel, _ *vmResourceModel) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		// We have no way of currently verifying that a running VM is a clone
+		// When we have implemented support for storage that'll probably change
+		return nil
+
+		/* err := gomega.InterceptGomegaFailure(func() {
+			gomega.Expect(r.Node).To(gomega.Equal(t.Node))
+			gomega.Expect(r.VMID).To(gomega.Not(gomega.Equal(t.VMID)))
+			gomega.Expect(r.Memory).To(gomega.Equal(t.Memory))
+		})
+		if err != nil {
+			return err
+		}
+
+		return nil */
+	}
+}
+
 func testCheckVMValuesInPve(r *vmResourceModel, node basetypes.StringValue, vmid basetypes.Int64Value, name basetypes.StringValue, description basetypes.StringValue, memory basetypes.Int64Value) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		err := gomega.InterceptGomegaFailure(func() {
@@ -458,6 +625,63 @@ func stopVMInPve(r *vmResourceModel) func() {
 		_, err := testutil.TestClient.StopVm(ref)
 		if err != nil {
 			panic("Failed to stop VM during test step: " + err.Error())
+		}
+	}
+}
+
+func createTemplateInPve(ctx context.Context, vmid int, node string, memory int) (*vmResourceModel, error) {
+	ref := pveapi.NewVmRef(vmid)
+	ref.SetNode(node)
+
+	config := pveapi.ConfigQemu{}
+	config.Memory = memory
+	err := config.Create(ref, testutil.TestClient)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = testutil.TestClient.StopVm(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	err = testutil.TestClient.CreateTemplate(ref)
+	if err != nil {
+		return nil, err
+	}
+
+	var vm vmResourceModel
+	err = UpdateResourceModelFromAPI(ctx, vmid, testutil.TestClient, &vm, VMStateEverything)
+	if err != nil {
+		return nil, err
+	}
+	return &vm, nil
+}
+
+func setVMMemoryInPve(r *vmResourceModel, memory int) func() {
+	return func() {
+		ref := pveapi.NewVmRef(int(r.VMID.ValueInt64()))
+		ref.SetNode(r.Node.ValueString())
+
+		config, err := pveapi.NewConfigQemuFromApi(ref, testutil.TestClient)
+		if err != nil {
+			panic("Unexpected error when test setting VM memory, reading config from API resulted in error: " + err.Error())
+		}
+		config.Memory = memory
+		rebootRequried, err := config.Update(false, ref, testutil.TestClient)
+		if err != nil {
+			panic("Unexpected error when test setting VM memory, updating config in API resulted in error: " + err.Error())
+		}
+
+		if rebootRequried {
+			_, err = testutil.TestClient.StopVm(ref)
+			if err != nil {
+				panic("Unexpected error when test setting VM memory, stopping VM resulted in error: " + err.Error())
+			}
+			_, err = testutil.TestClient.StartVm(ref)
+			if err != nil {
+				panic("Unexpected error when test setting VM memory, starting VM resulted in error: " + err.Error())
+			}
 		}
 	}
 }

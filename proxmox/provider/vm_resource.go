@@ -44,6 +44,8 @@ type vmResourceModel struct {
 
 	Status types.String `tfsdk:"status"`
 
+	Clone types.Int64 `tfsdk:"clone"`
+
 	Memory types.Int64 `tfsdk:"memory"`
 }
 
@@ -99,6 +101,13 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Computed:    true,
 				Default:     int64default.StaticInt64(16),
 			},
+			"clone": schema.Int64Attribute{
+				Description: "Create a full clone of virtual machine/template with this VMID.",
+				Optional:    true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.RequiresReplaceIfConfigured(),
+				},
+			},
 		},
 	}
 }
@@ -141,22 +150,66 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		return
 	}
 	tflog.Trace(ctx, fmt.Sprintf("Creating with VMID %d", id))
-	ref := pveapi.NewVmRef(id)
-	ref.SetNode(plan.Node.ValueString())
+	vmr := pveapi.NewVmRef(id)
+	vmr.SetNode(plan.Node.ValueString())
 
-	err = config.Create(ref, r.client)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error Creating VM",
-			"Could not create VM, unexpected error: "+err.Error(),
-		)
-		return
+	if plan.Clone.IsNull() {
+		err = config.Create(vmr, r.client)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Creating VM",
+				"Could not create VM, unexpected error: "+err.Error(),
+			)
+			return
+		}
+		tflog.Trace(ctx, "Created VM")
+	} else {
+		srcvmr := pveapi.NewVmRef(int(plan.Clone.ValueInt64()))
+		srcvmr.SetNode(plan.Node.ValueString())
+		err = config.CloneVm(srcvmr, vmr, r.client)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Creating VM",
+				"Could not clone VM, unexpected error: "+err.Error(),
+			)
+			return
+		}
+		tflog.Trace(ctx, "Created VM by cloning")
+
+		// would be great if the API client read description from config and sent it along the clone request
+		// .. until then, set it manually
+		requiresReboot, err := config.Update(false, vmr, r.client)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Creating VM",
+				"Could not update VM after cloning, unexpected error: "+err.Error(),
+			)
+			return
+		}
+
+		if requiresReboot {
+			_, err = r.client.StopVm(vmr)
+			if err != nil {
+				resp.Diagnostics.AddError(
+					"Error Creating VM",
+					"Could not stop VM while rebooting after clone, unexpected error: "+err.Error(),
+				)
+				return
+			}
+			_, err = r.client.StartVm(vmr)
+			if err != nil {
+				resp.Diagnostics.AddError(
+					"Error Creating VM",
+					"Could not start VM while rebooting after clone, unexpected error: "+err.Error(),
+				)
+				return
+			}
+		}
 	}
-	tflog.Trace(ctx, "Created VM")
 
 	if plan.Status.ValueString() == stateRunning {
 		tflog.Trace(ctx, "Starting VM since status set to "+plan.Status.ValueString())
-		_, err := r.client.StartVm(ref)
+		_, err := r.client.StartVm(vmr)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Creating VM",
@@ -167,7 +220,7 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	}
 
 	// populate Computed attributes
-	plan.VMID = types.Int64Value(int64(ref.VmId()))
+	plan.VMID = types.Int64Value(int64(vmr.VmId()))
 
 	tflog.Trace(ctx, fmt.Sprintf("Setting state after creating VM to: %+v", plan))
 	diags = resp.State.Set(ctx, plan)
@@ -249,10 +302,10 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 			"Unexpected error when getting next free VM ID from the API. If you can't solve this error please report it to the provider developers.\n\n"+err.Error())
 		return
 	}
-	ref := pveapi.NewVmRef(id)
-	ref.SetNode(plan.Node.ValueString())
+	vmr := pveapi.NewVmRef(id)
+	vmr.SetNode(plan.Node.ValueString())
 
-	_, err = config.Update(false, ref, r.client)
+	_, err = config.Update(false, vmr, r.client)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating VM",
@@ -262,7 +315,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	}
 	tflog.Trace(ctx, fmt.Sprintf("VM %d updated", id))
 
-	reboot, err := pveapi.GuestHasPendingChanges(ref, r.client)
+	reboot, err := pveapi.GuestHasPendingChanges(vmr, r.client)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating VM",
@@ -274,7 +327,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		// RebootVm (ie POST ../status/reboot) hangs and never completes, probably because we're testing on VMs with nothing installed
 		tflog.Trace(ctx, fmt.Sprintf("Rebooting VM %d...", id))
 
-		_, err = r.client.StopVm(ref)
+		_, err = r.client.StopVm(vmr)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Updating VM",
@@ -283,7 +336,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 			return
 		}
 
-		_, err = r.client.StartVm(ref)
+		_, err = r.client.StartVm(vmr)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Updating VM",
@@ -309,7 +362,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		switch plan.Status.ValueString() {
 		case stateRunning:
 			tflog.Trace(ctx, "Starting VM since status in plan set to "+plan.Status.ValueString())
-			_, err := r.client.StartVm(ref)
+			_, err := r.client.StartVm(vmr)
 			if err != nil {
 				resp.Diagnostics.AddError(
 					"Error Updating VM",
@@ -319,7 +372,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 			}
 		case stateStopped:
 			tflog.Trace(ctx, "Starting VM since status in plan set to "+plan.Status.ValueString())
-			_, err := r.client.StopVm(ref)
+			_, err := r.client.StopVm(vmr)
 			if err != nil {
 				resp.Diagnostics.AddError(
 					"Error Updating VM",
@@ -380,11 +433,11 @@ func (r *vmResource) Delete(ctx context.Context, req resource.DeleteRequest, res
 		return
 	}
 
-	ref := pveapi.NewVmRef(int(state.VMID.ValueInt64()))
-	ref.SetNode(state.Node.ValueString())
+	vmr := pveapi.NewVmRef(int(state.VMID.ValueInt64()))
+	vmr.SetNode(state.Node.ValueString())
 
 	// Does this fail if VM is stopped?
-	_, err = r.client.StopVm(ref)
+	_, err = r.client.StopVm(vmr)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			deleteErrorSummary,
@@ -393,7 +446,7 @@ func (r *vmResource) Delete(ctx context.Context, req resource.DeleteRequest, res
 		return
 	}
 
-	_, err = r.client.DeleteVm(ref)
+	_, err = r.client.DeleteVm(vmr)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			deleteErrorSummary,
@@ -401,7 +454,7 @@ func (r *vmResource) Delete(ctx context.Context, req resource.DeleteRequest, res
 		)
 		return
 	}
-	tflog.Trace(ctx, fmt.Sprintf("VM %d deleted", ref.VmId()))
+	tflog.Trace(ctx, fmt.Sprintf("VM %d deleted", vmr.VmId()))
 }
 
 func (*vmResource) ImportState(_ context.Context, _ resource.ImportStateRequest, resp *resource.ImportStateResponse) {
@@ -412,14 +465,14 @@ func (*vmResource) ImportState(_ context.Context, _ resource.ImportStateRequest,
 }
 
 func UpdateResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Client, model *vmResourceModel, sm VMStateMask) error {
-	ref := pveapi.NewVmRef(vmid)
+	vmr := pveapi.NewVmRef(vmid)
 
 	tflog.Trace(ctx, "Updating vmResourceModel from PVE API.", map[string]any{"vmid": vmid, "statemask": sm})
 
 	var config *pveapi.ConfigQemu
 	var err error
 	if sm&VMStateConfig != 0 {
-		config, err = pveapi.NewConfigQemuFromApi(ref, client)
+		config, err = pveapi.NewConfigQemuFromApi(vmr, client)
 		if err != nil {
 			return err
 		}
@@ -428,7 +481,7 @@ func UpdateResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Cl
 
 	var status string
 	if sm&VMStateStatus != 0 {
-		state, err := client.GetVmState(ref)
+		state, err := client.GetVmState(vmr)
 		if err != nil {
 			return err
 		}
