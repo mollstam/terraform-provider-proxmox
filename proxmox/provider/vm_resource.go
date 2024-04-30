@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -48,7 +49,9 @@ type vmResourceModel struct {
 
 	Clone types.Int64 `tfsdk:"clone"`
 
-	Memory types.Int64 `tfsdk:"memory"`
+	Sockets types.Int64 `tfsdk:"sockets"`
+	Cores   types.Int64 `tfsdk:"cores"`
+	Memory  types.Int64 `tfsdk:"memory"`
 }
 
 type VMStateMask uint8
@@ -102,6 +105,24 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Optional:    true,
 				Computed:    true,
 				Default:     booldefault.StaticBool(false),
+			},
+			"sockets": schema.Int64Attribute{
+				Description: "The number of CPU sockets.",
+				Optional:    true,
+				Computed:    true,
+				Default:     int64default.StaticInt64(1),
+				Validators: []validator.Int64{
+					int64validator.AtLeast(1),
+				},
+			},
+			"cores": schema.Int64Attribute{
+				Description: "The number of cores per socket.",
+				Optional:    true,
+				Computed:    true,
+				Default:     int64default.StaticInt64(1),
+				Validators: []validator.Int64{
+					int64validator.AtLeast(1),
+				},
 			},
 			"memory": schema.Int64Attribute{
 				Description: "Memory in MB",
@@ -518,6 +539,8 @@ func UpdateResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Cl
 		}
 
 		model.Agent = types.BoolValue(config.Agent > 0)
+		model.Sockets = types.Int64Value(int64(config.QemuSockets))
+		model.Cores = types.Int64Value(int64(config.QemuCores))
 		model.Memory = types.Int64Value(int64(config.Memory))
 	}
 	if sm&VMStateStatus != 0 {
@@ -540,6 +563,8 @@ func apiConfigFromResourceModel(model *vmResourceModel, config *pveapi.ConfigQem
 		config.Agent = 1
 	}
 
+	config.QemuSockets = int(model.Sockets.ValueInt64())
+	config.QemuCores = int(model.Cores.ValueInt64())
 	config.Memory = int(model.Memory.ValueInt64())
 }
 

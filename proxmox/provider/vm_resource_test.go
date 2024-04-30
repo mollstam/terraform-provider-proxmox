@@ -26,17 +26,20 @@ func TestAccVMResource_CreateAndUpdate(t *testing.T) {
 			{
 				Config: providerConfig + `
 resource "proxmox_vm" "test" {
-	node = "pve"
-	name = "wall-e"
+	node        = "pve"
+	name        = "wall-e"
 	description = "Waste Allocation Load Lifter: Earth-Class"
 
 	agent = true
-	memory = 32
+
+	sockets = 2
+	cores   = 2
+	memory  = 32
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("wall-e"), types.StringValue("Waste Allocation Load Lifter: Earth-Class"), types.Int64Value(32)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("wall-e"), types.StringValue("Waste Allocation Load Lifter: Earth-Class"), types.Int64Value(2), types.Int64Value(2), types.Int64Value(32)),
 					testCheckVMStatusInPve(&vm, "running"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "100"),
@@ -44,23 +47,28 @@ resource "proxmox_vm" "test" {
 					resource.TestCheckResourceAttr("proxmox_vm.test", "description", "Waste Allocation Load Lifter: Earth-Class"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "agent", "true"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "sockets", "2"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "cores", "2"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "32"),
 				),
 			},
 			{
 				Config: providerConfig + `
 resource "proxmox_vm" "test" {
-	node = "pve"
-	name = "m-o"
+	node        = "pve"
+	name        = "m-o"
 	description = "Microbe-Obliterator"
 
 	agent = false
-	memory = 40
+
+	sockets = 1
+	cores   = 1
+	memory  = 40
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(40)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(40)),
 					testCheckVMStatusInPve(&vm, "running"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "100"),
@@ -68,6 +76,8 @@ resource "proxmox_vm" "test" {
 					resource.TestCheckResourceAttr("proxmox_vm.test", "description", "Microbe-Obliterator"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "agent", "false"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "sockets", "1"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "cores", "1"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "40"),
 				),
 			},
@@ -91,7 +101,7 @@ resource "proxmox_vm" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringNull(), types.StringNull(), types.Int64Value(16)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringNull(), types.StringNull(), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
 					testCheckVMStatusInPve(&vm, "running"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "100"),
@@ -220,6 +230,8 @@ resource "proxmox_vm" "test" {
 	node = "pve"
 	name = "wall-e"
 
+	sockets = 1
+	cores = 4
 	memory = 36
 }
 `,
@@ -228,18 +240,24 @@ resource "proxmox_vm" "test" {
 				),
 			},
 			{
-				PreConfig: setVMMemoryInPve(&vm, 30),
+				PreConfig: testutil.ComposeFunc(
+					setVMMemoryInPve(&vm, 30),
+					setVMSocketsInPve(&vm, 2),
+					setVMCoresInPve(&vm, 2),
+				),
 				Config: providerConfig + `
 resource "proxmox_vm" "test" {
 	node = "pve"
 	name = "wall-e"
 
+	sockets = 1
+	cores = 4
 	memory = 36
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("wall-e"), types.StringNull(), types.Int64Value(36)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("wall-e"), types.StringNull(), types.Int64Value(1), types.Int64Value(4), types.Int64Value(36)),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "36"),
 				),
 			},
@@ -276,7 +294,7 @@ resource "proxmox_vm" "test_clone" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test_clone", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(16)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
 					testCheckVMStatusInPve(&vm, "running"),
 					testCheckVMIsCloneOf(&vm, template),
 					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "node", "pve"),
@@ -318,7 +336,7 @@ resource "proxmox_vm" "test_to_be_clone" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test_to_be_clone", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(16)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
 					testCheckVMStatusInPve(&vm, "running"),
 					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "vmid", "100"),
@@ -339,7 +357,7 @@ resource "proxmox_vm" "test_to_be_clone" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test_to_be_clone", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(16)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
 					testCheckVMStatusInPve(&vm, "running"),
 					testCheckVMIsCloneOf(&vm, template),
 					resource.TestCheckResourceAttr("proxmox_vm.test_to_be_clone", "node", "pve"),
@@ -516,7 +534,7 @@ resource "proxmox_vm" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(140), types.StringValue("wall-e"), types.StringNull(), types.Int64Value(16)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(140), types.StringValue("wall-e"), types.StringNull(), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "140"),
 				),
 			},
@@ -529,7 +547,7 @@ resource "proxmox_vm" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(140), types.StringValue("wall-e"), types.StringNull(), types.Int64Value(16)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(140), types.StringValue("wall-e"), types.StringNull(), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "140"),
 				),
 			},
@@ -577,13 +595,15 @@ func testCheckVMIsCloneOf(_ *vmResourceModel, _ *vmResourceModel) resource.TestC
 	}
 }
 
-func testCheckVMValuesInPve(r *vmResourceModel, node basetypes.StringValue, vmid basetypes.Int64Value, name basetypes.StringValue, description basetypes.StringValue, memory basetypes.Int64Value) resource.TestCheckFunc {
+func testCheckVMValuesInPve(r *vmResourceModel, node basetypes.StringValue, vmid basetypes.Int64Value, name basetypes.StringValue, description basetypes.StringValue, sockets basetypes.Int64Value, cores basetypes.Int64Value, memory basetypes.Int64Value) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		err := gomega.InterceptGomegaFailure(func() {
 			gomega.Expect(r.Node).To(gomega.Equal(node))
 			gomega.Expect(r.VMID).To(gomega.Equal(vmid))
 			gomega.Expect(r.Name).To(gomega.Equal(name))
 			gomega.Expect(r.Description).To(gomega.Equal(description))
+			gomega.Expect(r.Sockets).To(gomega.Equal(sockets))
+			gomega.Expect(r.Cores).To(gomega.Equal(cores))
 			gomega.Expect(r.Memory).To(gomega.Equal(memory))
 		})
 		if err != nil {
@@ -660,6 +680,62 @@ func createTemplateInPve(ctx context.Context, vmid int, node string, memory int)
 		return nil, err
 	}
 	return &vm, nil
+}
+
+func setVMSocketsInPve(r *vmResourceModel, sockets int) func() {
+	return func() {
+		ref := pveapi.NewVmRef(int(r.VMID.ValueInt64()))
+		ref.SetNode(r.Node.ValueString())
+
+		config, err := pveapi.NewConfigQemuFromApi(ref, testutil.TestClient)
+		if err != nil {
+			panic("Unexpected error when test setting VM sockets, reading config from API resulted in error: " + err.Error())
+		}
+		config.QemuSockets = sockets
+		rebootRequried, err := config.Update(false, ref, testutil.TestClient)
+		if err != nil {
+			panic("Unexpected error when test setting VM sockets, updating config in API resulted in error: " + err.Error())
+		}
+
+		if rebootRequried {
+			_, err = testutil.TestClient.StopVm(ref)
+			if err != nil {
+				panic("Unexpected error when test setting VM sockets, stopping VM resulted in error: " + err.Error())
+			}
+			_, err = testutil.TestClient.StartVm(ref)
+			if err != nil {
+				panic("Unexpected error when test setting VM sockets, starting VM resulted in error: " + err.Error())
+			}
+		}
+	}
+}
+
+func setVMCoresInPve(r *vmResourceModel, cores int) func() {
+	return func() {
+		ref := pveapi.NewVmRef(int(r.VMID.ValueInt64()))
+		ref.SetNode(r.Node.ValueString())
+
+		config, err := pveapi.NewConfigQemuFromApi(ref, testutil.TestClient)
+		if err != nil {
+			panic("Unexpected error when test setting VM cores, reading config from API resulted in error: " + err.Error())
+		}
+		config.QemuCores = cores
+		rebootRequried, err := config.Update(false, ref, testutil.TestClient)
+		if err != nil {
+			panic("Unexpected error when test setting VM cores, updating config in API resulted in error: " + err.Error())
+		}
+
+		if rebootRequried {
+			_, err = testutil.TestClient.StopVm(ref)
+			if err != nil {
+				panic("Unexpected error when test setting VM cores, stopping VM resulted in error: " + err.Error())
+			}
+			_, err = testutil.TestClient.StartVm(ref)
+			if err != nil {
+				panic("Unexpected error when test setting VM cores, starting VM resulted in error: " + err.Error())
+			}
+		}
+	}
 }
 
 func setVMMemoryInPve(r *vmResourceModel, memory int) func() {

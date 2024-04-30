@@ -67,3 +67,11 @@ func newProxmoxTestClient() (*pveapi.Client, error) {
 func GetTestLoggingContext() context.Context {
 	return tfsdklog.NewRootProviderLogger(context.Background(), tfsdklog.WithLogName("proxmox"), tfsdklog.WithLevel(hclog.Trace), tfsdklog.WithoutLocation())
 }
+
+func ComposeFunc(fs ...func()) func() {
+	return func() {
+		for _, f := range fs {
+			f()
+		}
+	}
+}
