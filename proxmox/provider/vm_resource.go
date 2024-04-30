@@ -7,6 +7,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -43,6 +44,7 @@ type vmResourceModel struct {
 	Description types.String `tfsdk:"description"`
 
 	Status types.String `tfsdk:"status"`
+	Agent  types.Bool   `tfsdk:"agent"`
 
 	Clone types.Int64 `tfsdk:"clone"`
 
@@ -94,6 +96,12 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Validators: []validator.String{
 					stringvalidator.OneOf([]string{stateStopped, stateRunning}...),
 				},
+			},
+			"agent": schema.BoolAttribute{
+				Description: "Enable/disable communication with the QEMU Guest Agent and its properties.",
+				Optional:    true,
+				Computed:    true,
+				Default:     booldefault.StaticBool(false),
 			},
 			"memory": schema.Int64Attribute{
 				Description: "Memory in MB",
@@ -509,6 +517,7 @@ func UpdateResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Cl
 			model.Description = types.StringValue(config.Description)
 		}
 
+		model.Agent = types.BoolValue(config.Agent > 0)
 		model.Memory = types.Int64Value(int64(config.Memory))
 	}
 	if sm&VMStateStatus != 0 {
@@ -525,6 +534,11 @@ func apiConfigFromResourceModel(model *vmResourceModel, config *pveapi.ConfigQem
 	// VMID set via VmRef
 	config.Name = model.Name.ValueString()
 	config.Description = model.Description.ValueString()
+
+	config.Agent = 0
+	if model.Agent.ValueBool() {
+		config.Agent = 1
+	}
 
 	config.Memory = int(model.Memory.ValueInt64())
 }

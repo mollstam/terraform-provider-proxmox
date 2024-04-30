@@ -30,6 +30,7 @@ resource "proxmox_vm" "test" {
 	name = "wall-e"
 	description = "Waste Allocation Load Lifter: Earth-Class"
 
+	agent = true
 	memory = 32
 }
 `,
@@ -42,6 +43,7 @@ resource "proxmox_vm" "test" {
 					resource.TestCheckResourceAttr("proxmox_vm.test", "name", "wall-e"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "description", "Waste Allocation Load Lifter: Earth-Class"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "agent", "true"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "32"),
 				),
 			},
@@ -52,6 +54,7 @@ resource "proxmox_vm" "test" {
 	name = "m-o"
 	description = "Microbe-Obliterator"
 
+	agent = false
 	memory = 40
 }
 `,
@@ -64,6 +67,7 @@ resource "proxmox_vm" "test" {
 					resource.TestCheckResourceAttr("proxmox_vm.test", "name", "m-o"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "description", "Microbe-Obliterator"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "agent", "false"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "40"),
 				),
 			},
