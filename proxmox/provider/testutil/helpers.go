@@ -6,9 +6,9 @@ import (
 	"errors"
 	"strings"
 
-	pveapi "github.com/Telmate/proxmox-api-go/proxmox"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/terraform-plugin-log/tfsdklog"
+	pveapi "github.com/mollstam/proxmox-api-go/proxmox"
 	"github.com/onsi/gomega"
 )
 

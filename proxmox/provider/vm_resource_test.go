@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"testing"
 
-	pveapi "github.com/Telmate/proxmox-api-go/proxmox"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	pveapi "github.com/mollstam/proxmox-api-go/proxmox"
 	"github.com/mollstam/terraform-provider-proxmox/proxmox/provider/testutil"
 	"github.com/onsi/gomega"
 )
