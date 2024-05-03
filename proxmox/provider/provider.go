@@ -48,6 +48,7 @@ type proxmoxProviderModel struct {
 	HTTPHeaders    types.String `tfsdk:"http_headers"`
 	Timeout        types.Int64  `tfsdk:"timeout"`
 	Debug          types.Bool   `tfsdk:"debug"`
+	ProxyServer    types.String `tfsdk:"proxy_server"`
 }
 
 func (p *proxmoxProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -96,6 +97,13 @@ func (*proxmoxProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 				Default:     booldefault.StaticBool(defaultDebug),
 				Computed:    true,
 				Description: "Enable or disable the verbose debug output from the API client",
+			},
+			"proxy_server": rschema.StringAttribute{
+				Optional:    true,
+				Description: "Send API calls through proxy if set, useful for debugging",
+				Validators: []validator.String{
+					URLValidator("you must specify a valid URL for the proxy server"),
+				},
 			},
 		},
 	}
@@ -220,6 +228,11 @@ func (*proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		debug = config.Debug.ValueBool()
 	}
 
+	proxyServer := os.Getenv("PVE_PROXY_SERVER")
+	if !config.ProxyServer.IsNull() {
+		proxyServer = config.ProxyServer.ValueString()
+	}
+
 	if apiTokenID != "" && !strings.Contains(apiTokenID, "!") {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("api_token_id"),
@@ -247,7 +260,8 @@ func (*proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		tlsConf,
 		httpHeaders,
 		int(timeout),
-		debug)
+		debug,
+		proxyServer)
 
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -347,7 +361,8 @@ func newProxmoxClient(apiURL string,
 	tlsConf *tls.Config,
 	httpHeaders string,
 	timeout int,
-	debug bool) (*pveapi.Client, error) {
+	debug bool,
+	proxyServer string) (*pveapi.Client, error) {
 	var err error
 	if apiTokenSecret == "" {
 		err = errors.New("API token secret not provided, must exist")
@@ -360,7 +375,7 @@ func newProxmoxClient(apiURL string,
 		return nil, err
 	}
 
-	client, _ := pveapi.NewClient(apiURL, nil, httpHeaders, tlsConf, "", timeout)
+	client, _ := pveapi.NewClient(apiURL, nil, httpHeaders, tlsConf, proxyServer, timeout)
 	*pveapi.Debug = debug
 
 	client.SetAPIToken(apiTokenID, apiTokenSecret)
