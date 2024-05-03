@@ -433,7 +433,7 @@ resource "proxmox_vm" "test_clone" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test_clone", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(32)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
 					testCheckVMStatusInPve(&vm, "running"),
 					testCheckVMIsCloneOf(&vm, template1),
 					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "node", "pve"),
@@ -456,7 +456,7 @@ resource "proxmox_vm" "test_clone" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test_clone", &vm),
-					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(33)),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
 					testCheckVMStatusInPve(&vm, "running"),
 					testCheckVMIsCloneOf(&vm, template2),
 					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "node", "pve"),
