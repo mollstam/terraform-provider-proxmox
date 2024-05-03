@@ -128,8 +128,8 @@ github.com/mitchellh/mapstructure v1.5.0 h1:jeMsZIYE/09sWLaz43PL7Gy6RuMjD2eJVyua
 github.com/mitchellh/mapstructure v1.5.0/go.mod h1:bFUtVrKA4DC2yAKiSyO/QUcy7e+RRV2QTWOzhPopBRo=
 github.com/mitchellh/reflectwalk v1.0.2 h1:G2LzWKi524PWgd3mLHV8Y5k7s6XUvT0Gef6zxSIeXaQ=
 github.com/mitchellh/reflectwalk v1.0.2/go.mod h1:mSTlrgnPZtwu0c4WaC2kGObEpuNDbx0jmZXqmk4esnw=
-github.com/mollstam/proxmox-api-go v0.0.0-20240430035105-30569ec5632c h1:Os2MMptofvF6L0sbjj+sz+oCioslO5+15G/B1dtMLxU=
-github.com/mollstam/proxmox-api-go v0.0.0-20240430035105-30569ec5632c/go.mod h1:uRg1RbcVhvi92/5nlkiOb5QBpwfQUVlTFmbf03HmF4w=
+github.com/mollstam/proxmox-api-go v0.0.0-20240503043952-7972b5171e98 h1:gAuKhqiHySmgaa7saW/oIwvqXFC48D2RZp2e9wcUgJU=
+github.com/mollstam/proxmox-api-go v0.0.0-20240503043952-7972b5171e98/go.mod h1:uRg1RbcVhvi92/5nlkiOb5QBpwfQUVlTFmbf03HmF4w=
 github.com/oklog/run v1.1.0 h1:GEenZ1cK0+q0+wsJew9qUg/DyD8k3JzYsZAi5gYi2mA=
 github.com/oklog/run v1.1.0/go.mod h1:sVPdnTZT1zYwAJeCMu2Th4T21pA3FPOQRfWjQlk7DVU=
 github.com/onsi/ginkgo/v2 v2.15.0 h1:79HwNRBAZHOEwrczrgSOPy+eFTTlIGELKy5as+ClttY=

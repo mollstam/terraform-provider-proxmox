@@ -7,13 +7,19 @@ terraform {
 }
 
 provider "proxmox" {
-    api_url = "https://192.168.56.102:8006/api2/json"
+  api_url = "https://192.168.56.102:8006/api2/json"
 
-    debug = true
-    tls_insecure = true
+  debug        = true
+  tls_insecure = true
 }
 
 resource "proxmox_vm" "example" {
-    node = "pve"
-    name = "alice"
+  node = "pve"
+  name = "alice"
+
+  virtio0 = {
+    media   = "disk"
+    size    = 30
+    storage = "local-lvm"
+  }
 }

@@ -12,7 +12,7 @@ require (
 	github.com/hashicorp/terraform-plugin-go v0.22.2
 	github.com/hashicorp/terraform-plugin-log v0.9.0
 	github.com/hashicorp/terraform-plugin-testing v1.7.0
-	github.com/mollstam/proxmox-api-go v0.0.0-20240430035105-30569ec5632c
+	github.com/mollstam/proxmox-api-go v0.0.0-20240503043952-7972b5171e98
 
 )
 
