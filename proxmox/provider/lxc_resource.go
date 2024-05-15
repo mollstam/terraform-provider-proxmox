@@ -33,6 +33,7 @@ type lxcResourceModel struct {
 	VMID       types.Int64  `tfsdk:"vmid"`
 	Ostemplate types.String `tfsdk:"ostemplate"`
 	Ostype     types.String `tfsdk:"ostype"`
+	Hostname   types.String `tfsdk:"hostname"`
 }
 
 func (*lxcResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -64,6 +65,11 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 			},
 			"ostype": schema.StringAttribute{
 				Description: "OS type. This is used to setup configuration inside the container, and corresponds to lxc setup scripts in /usr/share/lxc/config/<ostype>.common.conf. Value 'unmanaged' can be used to skip OS specific setup.",
+				Computed:    true,
+				Optional:    true,
+			},
+			"hostname": schema.StringAttribute{
+				Description: "Set a host name for the container.",
 				Computed:    true,
 				Optional:    true,
 			},
@@ -132,6 +138,11 @@ func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	// populate Computed attributes
 	plan.VMID = types.Int64Value(int64(vmr.VmId()))
 	plan.Ostype = types.StringValue(config.OsType)
+	if config.Hostname == "" {
+		plan.Hostname = types.StringNull()
+	} else {
+		plan.Hostname = types.StringValue(config.Hostname)
+	}
 
 	tflog.Trace(ctx, fmt.Sprintf("Setting state after creating LXC to: %+v", plan))
 	diags = resp.State.Set(ctx, plan)
@@ -389,6 +400,7 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 	model.Node = types.StringValue(vmr.Node())
 	model.VMID = types.Int64Value(int64(vmr.VmId()))
 	model.Ostype = types.StringValue(config.OsType)
+	model.Hostname = types.StringValue(config.Hostname)
 
 	tflog.Trace(ctx, fmt.Sprintf("Updated lxcResourceModel from PVE API, model is now %+v", model), map[string]any{"vmid": vmid})
 
@@ -399,6 +411,10 @@ func apiConfigFromLXCResourceModel(_ context.Context, model *lxcResourceModel, c
 	// Node set via VmRef
 	// VMID set via VmRef
 	config.Ostemplate = model.Ostemplate.ValueString()
+
+	if !model.Hostname.IsNull() && !model.Hostname.IsUnknown() {
+		config.Hostname = model.Hostname.ValueString()
+	}
 
 	return nil
 }
