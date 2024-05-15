@@ -280,7 +280,7 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	}
 
 	config := &pveapi.ConfigQemu{}
-	err := apiConfigFromResourceModel(ctx, &plan, config)
+	err := apiConfigFromVMResourceModel(ctx, &plan, config)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error constructing API struct from internal model",
@@ -289,7 +289,7 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	}
 	tflog.Trace(ctx, fmt.Sprintf("Creating VM from model: %+v", plan))
 
-	id, err := getIDToUse(&plan, r.client)
+	id, err := getIDToUse(plan.VMID, r.client)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Determining VM ID",
@@ -311,6 +311,10 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		}
 		tflog.Trace(ctx, "Created VM")
 	} else {
+		fullClone := new(int)
+		*fullClone = 0
+		config.FullClone = fullClone
+
 		srcvmr := pveapi.NewVmRef(int(plan.Clone.ValueInt64()))
 		srcvmr.SetNode(plan.Node.ValueString())
 		err = config.CloneVm(srcvmr, vmr, r.client)
@@ -411,7 +415,7 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 			return
 		}
 
-		err = UpdateResourceModelFromAPI(ctx, int(state.VMID.ValueInt64()), r.client, &state, VMStateEverything)
+		err = UpdateVMResourceModelFromAPI(ctx, int(state.VMID.ValueInt64()), r.client, &state, VMStateEverything)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Reading VM State",
@@ -440,7 +444,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	tflog.Trace(ctx, fmt.Sprintf("Updating VM with plan: %+v", plan))
 
 	config := &pveapi.ConfigQemu{}
-	err := apiConfigFromResourceModel(ctx, &plan, config)
+	err := apiConfigFromVMResourceModel(ctx, &plan, config)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error constructing API struct from internal model",
@@ -448,7 +452,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		return
 	}
 
-	id, err := getIDToUse(&plan, r.client)
+	id, err := getIDToUse(plan.VMID, r.client)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Determining VM ID",
@@ -502,7 +506,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	}
 
 	var state vmResourceModel
-	err = UpdateResourceModelFromAPI(ctx, id, r.client, &state, VMStateEverything)
+	err = UpdateVMResourceModelFromAPI(ctx, id, r.client, &state, VMStateEverything)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating VM",
@@ -536,7 +540,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		}
 	}
 
-	err = UpdateResourceModelFromAPI(ctx, id, r.client, &state, VMStateStatus)
+	err = UpdateVMResourceModelFromAPI(ctx, id, r.client, &state, VMStateStatus)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating VM",
@@ -617,7 +621,7 @@ func (*vmResource) ImportState(_ context.Context, _ resource.ImportStateRequest,
 	)
 }
 
-func UpdateResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Client, model *vmResourceModel, sm VMStateMask) error {
+func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Client, model *vmResourceModel, sm VMStateMask) error {
 	vmr := pveapi.NewVmRef(vmid)
 
 	tflog.Trace(ctx, "Updating vmResourceModel from PVE API.", map[string]any{"vmid": vmid, "statemask": sm})
@@ -792,7 +796,7 @@ func virtioStateValueFromAPIConfig(ctx context.Context, c *pveapi.QemuVirtIOStor
 	return m, nil
 }
 
-func apiConfigFromResourceModel(ctx context.Context, model *vmResourceModel, config *pveapi.ConfigQemu) error {
+func apiConfigFromVMResourceModel(ctx context.Context, model *vmResourceModel, config *pveapi.ConfigQemu) error {
 	// Node set via VmRef
 	// VMID set via VmRef
 	config.Name = model.Name.ValueString()
@@ -898,11 +902,11 @@ func virtioAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue)
 	return c, nil
 }
 
-func getIDToUse(model *vmResourceModel, client *pveapi.Client) (id int, err error) {
+func getIDToUse(v basetypes.Int64Value, client *pveapi.Client) (id int, err error) {
 	const initialVMID = 100
 
-	if !model.VMID.IsUnknown() {
-		id = int(model.VMID.ValueInt64())
+	if !v.IsUnknown() {
+		id = int(v.ValueInt64())
 	} else {
 		id, err = client.GetNextID(initialVMID)
 		if err != nil {

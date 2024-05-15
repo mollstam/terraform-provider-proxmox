@@ -348,6 +348,7 @@ func (*proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureReq
 func (*proxmoxProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewVMResource,
+		NewLXCResource,
 	}
 }
 

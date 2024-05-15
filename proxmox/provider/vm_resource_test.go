@@ -296,8 +296,7 @@ func TestAccVMResource_CreateCloneOfTemplate(t *testing.T) {
 
 	ctx := testutil.GetTestLoggingContext()
 
-	// we're using memory as a unique identifier here, expecting clone to have same non-default memory setting
-	template, err := createTemplateInPve(ctx, 200, "pve", 22)
+	template, err := createTemplateInPve(ctx, 200, "pve", 16, 5)
 	if err != nil {
 		t.Error("Error during setup: " + err.Error())
 		return
@@ -340,7 +339,7 @@ func TestAccVMResource_CreateAndUpdateToClone_ShouldBeRecreatedAsClone(t *testin
 
 	ctx := testutil.GetTestLoggingContext()
 
-	template, err := createTemplateInPve(ctx, 200, "pve", 32)
+	template, err := createTemplateInPve(ctx, 200, "pve", 16, 5)
 	if err != nil {
 		t.Error("Error during setup: " + err.Error())
 		return
@@ -402,7 +401,7 @@ func TestAccVMResource_CreateCloneAndUpdateToAnotherClone_ShouldBeRecreated(t *t
 
 	ctx := testutil.GetTestLoggingContext()
 
-	template1, err := createTemplateInPve(ctx, 200, "pve", 32)
+	template1, err := createTemplateInPve(ctx, 200, "pve", 16, 5)
 	if err != nil {
 		t.Error("Error during setup: " + err.Error())
 		return
@@ -410,7 +409,7 @@ func TestAccVMResource_CreateCloneAndUpdateToAnotherClone_ShouldBeRecreated(t *t
 	cleanUpFunc1 := destroyVMInPve(template1)
 	defer cleanUpFunc1()
 
-	template2, err := createTemplateInPve(ctx, 201, "pve", 33)
+	template2, err := createTemplateInPve(ctx, 201, "pve", 16, 7)
 	if err != nil {
 		t.Error("Error during setup: " + err.Error())
 		return
@@ -666,7 +665,7 @@ func testCheckVMExistsInPve(ctx context.Context, n string, r *vmResourceModel) r
 			return err
 		}
 
-		err = UpdateResourceModelFromAPI(ctx, int(vmid), testutil.TestClient, r, VMStateEverything)
+		err = UpdateVMResourceModelFromAPI(ctx, int(vmid), testutil.TestClient, r, VMStateEverything)
 		if err != nil {
 			return err
 		}
@@ -675,22 +674,37 @@ func testCheckVMExistsInPve(ctx context.Context, n string, r *vmResourceModel) r
 	}
 }
 
-func testCheckVMIsCloneOf(_ *vmResourceModel, _ *vmResourceModel) resource.TestCheckFunc {
+func testCheckVMIsCloneOf(r *vmResourceModel, t *vmResourceModel) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
-		// We have no way of currently verifying that a running VM is a clone
-		// When we have implemented support for storage that'll probably change
-		return nil
+		vmid := int(r.VMID.ValueInt64())
+		vmr := pveapi.NewVmRef(vmid)
+		config, err := pveapi.NewConfigQemuFromApi(vmr, testutil.TestClient)
+		if err != nil {
+			return err
+		}
+		volume, ok := config.QemuUnusedDisks[0]["file"].(string)
+		if !ok {
+			panic("Unable to read qemu disk file property as string")
+		}
+		re := regexp.MustCompile(`^(\d+)/`)
+		m := re.FindStringSubmatch(volume)
+		if m == nil {
+			panic("Unable to parse template id from clone volume " + volume)
+		}
+		c, err := strconv.ParseInt(m[1], 10, 0)
+		if err != nil {
+			return err
+		}
+		cv := types.Int64Value(c)
 
-		/* err := gomega.InterceptGomegaFailure(func() {
-			gomega.Expect(r.Node).To(gomega.Equal(t.Node))
-			gomega.Expect(r.VMID).To(gomega.Not(gomega.Equal(t.VMID)))
-			gomega.Expect(r.Memory).To(gomega.Equal(t.Memory))
+		err = gomega.InterceptGomegaFailure(func() {
+			gomega.Expect(cv).To(gomega.Equal(t.VMID))
 		})
 		if err != nil {
 			return err
 		}
 
-		return nil */
+		return nil
 	}
 }
 
@@ -780,12 +794,25 @@ func stopVMInPve(r *vmResourceModel) func() {
 	}
 }
 
-func createTemplateInPve(ctx context.Context, vmid int, node string, memory int) (*vmResourceModel, error) {
+func createTemplateInPve(ctx context.Context, vmid int, node string, memory int, size int) (*vmResourceModel, error) {
 	ref := pveapi.NewVmRef(vmid)
 	ref.SetNode(node)
 
 	config := pveapi.ConfigQemu{}
 	config.Memory = memory
+
+	config.Disks = &pveapi.QemuStorages{
+		VirtIO: &pveapi.QemuVirtIODisks{
+			Disk_0: &pveapi.QemuVirtIOStorage{
+				Disk: &pveapi.QemuVirtIODisk{
+					Storage:         "local",
+					SizeInKibibytes: pveapi.QemuDiskSize(size * 1024 * 1024),
+					Format:          pveapi.QemuDiskFormat_Raw,
+				},
+			},
+		},
+	}
+
 	err := config.Create(ref, testutil.TestClient)
 	if err != nil {
 		return nil, err
@@ -802,7 +829,7 @@ func createTemplateInPve(ctx context.Context, vmid int, node string, memory int)
 	}
 
 	var vm vmResourceModel
-	err = UpdateResourceModelFromAPI(ctx, vmid, testutil.TestClient, &vm, VMStateEverything)
+	err = UpdateVMResourceModelFromAPI(ctx, vmid, testutil.TestClient, &vm, VMStateEverything)
 	if err != nil {
 		return nil, err
 	}
