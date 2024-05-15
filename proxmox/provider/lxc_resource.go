@@ -267,6 +267,10 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	}
 
 	var state lxcResourceModel
+
+	// ostemplate not part of PVE state. We keep it in TF state and use it when (re)creating the VM.
+	state.Ostemplate = plan.Ostemplate
+
 	err = UpdateLXCResourceModelFromAPI(ctx, id, r.client, &state)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -277,7 +281,7 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	}
 
 	tflog.Trace(ctx, fmt.Sprintf("Setting state after updating LXC to: %+v", state))
-	diags = resp.State.Set(ctx, plan)
+	diags = resp.State.Set(ctx, state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
