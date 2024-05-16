@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	pveapi "github.com/mollstam/proxmox-api-go/proxmox"
@@ -29,12 +32,26 @@ type lxcResource struct {
 }
 
 type lxcResourceModel struct {
-	Node       types.String `tfsdk:"node"`
-	VMID       types.Int64  `tfsdk:"vmid"`
+	Node types.String `tfsdk:"node"`
+	VMID types.Int64  `tfsdk:"vmid"`
+
+	Status types.String `tfsdk:"status"`
+
 	Ostemplate types.String `tfsdk:"ostemplate"`
 	Ostype     types.String `tfsdk:"ostype"`
-	Hostname   types.String `tfsdk:"hostname"`
+
+	Hostname types.String `tfsdk:"hostname"`
+	Password types.String `tfsdk:"password"`
 }
+
+type LXCStateMask uint8
+
+const (
+	LXCStateConfig LXCStateMask = 1 << iota
+	LXCStateStatus
+
+	LXCStateEverything LXCStateMask = 0xff
+)
 
 func (*lxcResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_lxc"
@@ -56,6 +73,15 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 					int64planmodifier.UseStateForUnknown(),
 				},
 			},
+			"status": schema.StringAttribute{
+				Description: "LXC Container status.",
+				Optional:    true,
+				Computed:    true,
+				Default:     stringdefault.StaticString(stateRunning),
+				Validators: []validator.String{
+					stringvalidator.OneOf([]string{stateStopped, stateRunning}...),
+				},
+			},
 			"ostemplate": schema.StringAttribute{
 				Description: "The OS template or backup file.",
 				Required:    true,
@@ -72,6 +98,15 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 				Description: "Set a host name for the container.",
 				Computed:    true,
 				Optional:    true,
+			},
+			"password": schema.StringAttribute{
+				Description: "Sets root password inside container.",
+				Optional:    true,
+				Sensitive:   true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 		},
 	}
@@ -135,6 +170,18 @@ func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 	tflog.Trace(ctx, "Created LXC")
 
+	if plan.Status.ValueString() == stateRunning {
+		tflog.Trace(ctx, "Starting LXC since status set to "+plan.Status.ValueString())
+		_, err := r.client.StartVm(vmr)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Creating LXC",
+				"Could not start LXC after creation, unexpected error: "+err.Error(),
+			)
+			return
+		}
+	}
+
 	// populate Computed attributes
 	plan.VMID = types.Int64Value(int64(vmr.VmId()))
 	plan.Ostype = types.StringValue(config.OsType)
@@ -186,7 +233,7 @@ func (r *lxcResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 			return
 		}
 
-		err = UpdateLXCResourceModelFromAPI(ctx, int(state.VMID.ValueInt64()), r.client, &state)
+		err = UpdateLXCResourceModelFromAPI(ctx, int(state.VMID.ValueInt64()), r.client, &state, LXCStateEverything)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Reading LXC State",
@@ -279,10 +326,45 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 
 	var state lxcResourceModel
 
-	// ostemplate not part of PVE state. We keep it in TF state and use it when (re)creating the VM.
+	// carry over values not part of PVE state
 	state.Ostemplate = plan.Ostemplate
+	state.Password = plan.Password
 
-	err = UpdateLXCResourceModelFromAPI(ctx, id, r.client, &state)
+	err = UpdateLXCResourceModelFromAPI(ctx, id, r.client, &state, LXCStateEverything)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Updating LXC",
+			"Could not read back updated LXC status, unexpected error: "+err.Error(),
+		)
+		return
+	}
+
+	if plan.Status.ValueString() != state.Status.ValueString() {
+		switch plan.Status.ValueString() {
+		case stateRunning:
+			tflog.Trace(ctx, "Starting LXC since status in plan set to "+plan.Status.ValueString())
+			_, err := r.client.StartVm(vmr)
+			if err != nil {
+				resp.Diagnostics.AddError(
+					"Error Updating LXC",
+					"Could not start LXC, unexpected error: "+err.Error(),
+				)
+				return
+			}
+		case stateStopped:
+			tflog.Trace(ctx, "Starting LXC since status in plan set to "+plan.Status.ValueString())
+			_, err := r.client.StopVm(vmr)
+			if err != nil {
+				resp.Diagnostics.AddError(
+					"Error Updating LXC",
+					"Could not stop LXC, unexpected error: "+err.Error(),
+				)
+				return
+			}
+		}
+	}
+
+	err = UpdateLXCResourceModelFromAPI(ctx, id, r.client, &state, LXCStateStatus)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating LXC",
@@ -383,7 +465,7 @@ func (*lxcResource) ImportState(_ context.Context, _ resource.ImportStateRequest
 	)
 }
 
-func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Client, model *lxcResourceModel) error {
+func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.Client, model *lxcResourceModel, sm LXCStateMask) error {
 	vmr := pveapi.NewVmRef(vmid)
 
 	tflog.Trace(ctx, "Updating lxcResourceModel from PVE API.", map[string]any{"vmid": vmid})
@@ -391,16 +473,38 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 	var config *pveapi.ConfigLxc
 	var err error
 
-	config, err = pveapi.NewConfigLxcFromApi(vmr, client)
-	if err != nil {
-		return err
+	if sm&LXCStateConfig != 0 {
+		config, err = pveapi.NewConfigLxcFromApi(vmr, client)
+		if err != nil {
+			return err
+		}
+		tflog.Trace(ctx, fmt.Sprintf(".. updated config: %+v", config))
 	}
-	tflog.Trace(ctx, fmt.Sprintf(".. updated config: %+v", config))
 
-	model.Node = types.StringValue(vmr.Node())
-	model.VMID = types.Int64Value(int64(vmr.VmId()))
-	model.Ostype = types.StringValue(config.OsType)
-	model.Hostname = types.StringValue(config.Hostname)
+	var status string
+	if sm&LXCStateStatus != 0 {
+		state, err := client.GetVmState(vmr)
+		if err != nil {
+			return err
+		}
+		var ok bool
+		status, ok = state["status"].(string)
+		if !ok {
+			return fmt.Errorf("status field in VM state was not a string but %T", state["status"])
+		}
+		tflog.Trace(ctx, ".. updated status: "+status)
+	}
+
+	if sm&LXCStateConfig != 0 {
+		model.Node = types.StringValue(vmr.Node())
+		model.VMID = types.Int64Value(int64(vmr.VmId()))
+		model.Ostype = types.StringValue(config.OsType)
+		model.Hostname = types.StringValue(config.Hostname)
+	}
+
+	if sm&LXCStateStatus != 0 {
+		model.Status = types.StringValue(status)
+	}
 
 	tflog.Trace(ctx, fmt.Sprintf("Updated lxcResourceModel from PVE API, model is now %+v", model), map[string]any{"vmid": vmid})
 
@@ -414,6 +518,10 @@ func apiConfigFromLXCResourceModel(_ context.Context, model *lxcResourceModel, c
 
 	if !model.Hostname.IsNull() && !model.Hostname.IsUnknown() {
 		config.Hostname = model.Hostname.ValueString()
+	}
+
+	if !model.Password.IsNull() && !model.Password.IsUnknown() {
+		config.Password = model.Password.ValueString()
 	}
 
 	return nil
