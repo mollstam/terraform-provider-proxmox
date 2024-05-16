@@ -7,6 +7,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
@@ -37,8 +39,9 @@ type lxcResourceModel struct {
 
 	Status types.String `tfsdk:"status"`
 
-	Ostemplate types.String `tfsdk:"ostemplate"`
-	Ostype     types.String `tfsdk:"ostype"`
+	Ostemplate   types.String `tfsdk:"ostemplate"`
+	Unprivileged types.Bool   `tfsdk:"unprivileged"`
+	Ostype       types.String `tfsdk:"ostype"`
 
 	Hostname types.String `tfsdk:"hostname"`
 	Password types.String `tfsdk:"password"`
@@ -87,6 +90,15 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 				Required:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"unprivileged": schema.BoolAttribute{
+				Description: "Makes the container run as unprivileged user. (Should not be modified manually.)",
+				Computed:    true,
+				Optional:    true,
+				Default:     booldefault.StaticBool(false),
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.RequiresReplace(),
 				},
 			},
 			"ostype": schema.StringAttribute{
@@ -190,6 +202,7 @@ func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	} else {
 		plan.Hostname = types.StringValue(config.Hostname)
 	}
+	plan.Unprivileged = types.BoolValue(config.Unprivileged)
 
 	tflog.Trace(ctx, fmt.Sprintf("Setting state after creating LXC to: %+v", plan))
 	diags = resp.State.Set(ctx, plan)
@@ -500,6 +513,7 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 		model.VMID = types.Int64Value(int64(vmr.VmId()))
 		model.Ostype = types.StringValue(config.OsType)
 		model.Hostname = types.StringValue(config.Hostname)
+		model.Unprivileged = types.BoolValue(config.Unprivileged)
 	}
 
 	if sm&LXCStateStatus != 0 {
@@ -522,6 +536,10 @@ func apiConfigFromLXCResourceModel(_ context.Context, model *lxcResourceModel, c
 
 	if !model.Password.IsNull() && !model.Password.IsUnknown() {
 		config.Password = model.Password.ValueString()
+	}
+
+	if !model.Unprivileged.IsNull() && !model.Unprivileged.IsUnknown() {
+		config.Unprivileged = model.Unprivileged.ValueBool()
 	}
 
 	return nil

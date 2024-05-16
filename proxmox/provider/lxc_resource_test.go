@@ -33,8 +33,54 @@ func TestAccLXCResource_CreateAndUpdate(t *testing.T) {
 			{
 				Config: providerConfig + `
 resource "proxmox_lxc" "test" {
-	node        = "pve"
-	ostemplate  = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+	hostname = "wall-e"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
+				),
+			},
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	
+	hostname = "m-o"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("m-o"), types.BoolValue(false)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "m-o"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccLXCResource_CreateAndUpdatePassword(t *testing.T) {
+	var lxc lxcResourceModel
+
+	// changing password will recreate resource, hence its own test
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
 
 	hostname = "wall-e"
 	password = "garbageiscool"
@@ -42,7 +88,7 @@ resource "proxmox_lxc" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
-					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e")),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
 					testCheckLXCPassword(&lxc, "root", "garbageiscool"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
@@ -52,20 +98,70 @@ resource "proxmox_lxc" "test" {
 			{
 				Config: providerConfig + `
 resource "proxmox_lxc" "test" {
-	node        = "pve"
-	ostemplate  = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
 	
-	hostname = "m-o"
+	hostname = "wall-e"
 	password = "sunday_clothes"
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
-					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("m-o")),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
 					testCheckLXCPassword(&lxc, "root", "sunday_clothes"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
-					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "m-o"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "password", "sunday_clothes"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccLXCResource_CreateAndUpdateUnprivileged(t *testing.T) {
+	var lxc lxcResourceModel
+
+	// changing unprivileged will recreate resource, hence its own test
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+	hostname     = "wall-e"
+	unprivileged = true
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(true)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "unprivileged", "true"),
+				),
+			},
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	
+	hostname     = "wall-e"
+	unprivileged = false
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "unprivileged", "false"),
 				),
 			},
 		},
@@ -149,7 +245,7 @@ resource "proxmox_lxc" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
-					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e")),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
 				),
@@ -175,7 +271,7 @@ resource "proxmox_lxc" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
-					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("CT100")),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("CT100"), types.BoolValue(false)),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 				),
 			},
@@ -188,7 +284,7 @@ resource "proxmox_lxc" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
-					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("archlinux"), types.StringValue("CT100")),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("archlinux"), types.StringValue("CT100"), types.BoolValue(false)),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 				),
 			},
@@ -249,13 +345,14 @@ func testCheckLXCStatusInPve(r *lxcResourceModel, status string) resource.TestCh
 	}
 }
 
-func testCheckLXCValuesInPve(r *lxcResourceModel, node basetypes.StringValue, vmid basetypes.Int64Value, ostype basetypes.StringValue, hostname basetypes.StringValue) resource.TestCheckFunc {
+func testCheckLXCValuesInPve(r *lxcResourceModel, node basetypes.StringValue, vmid basetypes.Int64Value, ostype basetypes.StringValue, hostname basetypes.StringValue, unprivileged basetypes.BoolValue) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		err := gomega.InterceptGomegaFailure(func() {
 			gomega.Expect(r.Node).To(gomega.Equal(node))
 			gomega.Expect(r.VMID).To(gomega.Equal(vmid))
 			gomega.Expect(r.Ostype).To(gomega.Equal(ostype))
 			gomega.Expect(r.Hostname).To(gomega.Equal(hostname))
+			gomega.Expect(r.Unprivileged).To(gomega.Equal(unprivileged))
 		})
 		if err != nil {
 			return err
