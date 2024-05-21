@@ -2,19 +2,25 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	pveapi "github.com/mollstam/proxmox-api-go/proxmox"
 )
@@ -45,6 +51,52 @@ type lxcResourceModel struct {
 
 	Hostname types.String `tfsdk:"hostname"`
 	Password types.String `tfsdk:"password"`
+
+	RootFs types.Object `tfsdk:"rootfs"`
+}
+
+type rootfsModel struct {
+	Volume  types.String `tfsdk:"volume"`
+	Storage types.String `tfsdk:"storage"`
+	Size    types.String `tfsdk:"size"`
+}
+
+func (rootfsModel) AttributeTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"volume":  types.StringType,
+		"storage": types.StringType,
+		"size":    types.StringType,
+	}
+}
+
+func (m *rootfsModel) readFromAPIConfig(c *pveapi.QemuDevice) {
+	if val, ok := (*c)["volume"]; ok && val != "" {
+		m.Volume = types.StringValue(val.(string))
+		parts := strings.Split(val.(string), ":")
+		m.Storage = types.StringValue(parts[0])
+		if len(parts) == 2 {
+			size, err := strconv.ParseInt(parts[1], 10, 64)
+			if err == nil { // if eg "local-lvm:3" read it as 3G size
+				m.Size = types.StringValue(fmt.Sprintf("%dG", size))
+			}
+		}
+	} else if val, ok := (*c)["storage"]; ok {
+		m.Storage = types.StringValue(val.(string))
+	}
+	if val, ok := (*c)["size"]; ok {
+		m.Size = types.StringValue(val.(string))
+	}
+}
+
+func (m rootfsModel) writeToAPIConfig(c *pveapi.QemuDevice) {
+	(*c)["size"] = m.Size.ValueString()
+	if !m.Volume.IsUnknown() {
+		(*c)["volume"] = m.Volume.ValueString()
+		parts := strings.Split(m.Volume.ValueString(), ":")
+		(*c)["storage"] = parts[0]
+	} else {
+		(*c)["storage"] = m.Storage.ValueString()
+	}
 }
 
 type LXCStateMask uint8
@@ -105,11 +157,17 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 				Description: "OS type. This is used to setup configuration inside the container, and corresponds to lxc setup scripts in /usr/share/lxc/config/<ostype>.common.conf. Value 'unmanaged' can be used to skip OS specific setup.",
 				Computed:    true,
 				Optional:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"hostname": schema.StringAttribute{
 				Description: "Set a host name for the container.",
 				Computed:    true,
 				Optional:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"password": schema.StringAttribute{
 				Description: "Sets root password inside container.",
@@ -120,6 +178,35 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
+			"rootfs": schemaRootFs(),
+		},
+	}
+}
+
+func schemaRootFs() schema.Attribute {
+	return schema.SingleNestedAttribute{
+		Description: "Use volume as container root.",
+		Computed:    true,
+		Optional:    true,
+		Attributes: map[string]schema.Attribute{
+			"volume": schema.StringAttribute{
+				Description: "Volume identifier.",
+				Computed:    true,
+			},
+			"storage": schema.StringAttribute{
+				Description: "The storage identifier.",
+				Required:    true,
+			},
+			"size": schema.StringAttribute{
+				Description: "Size in kilobyte (1024 bytes). Optional suffixes 'M' (megabyte, 1024K) and 'G' (gigabyte, 1024M)",
+				Required:    true,
+				Validators: []validator.String{
+					DiskSizeValidator("size must be numbers only, possibly ending in M or G"),
+				},
+			},
+		},
+		PlanModifiers: []planmodifier.Object{
+			objectplanmodifier.UseStateForUnknown(),
 		},
 	}
 }
@@ -170,7 +257,7 @@ func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	tflog.Trace(ctx, fmt.Sprintf("Creating with VMID %d", id))
 	vmr := pveapi.NewVmRef(id)
 	vmr.SetNode(plan.Node.ValueString())
-	vmr.SetVmType("lxc")
+	vmr.SetVmType(vmTypeLxc)
 
 	err = config.CreateLxc(vmr, r.client)
 	if err != nil {
@@ -194,15 +281,15 @@ func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, re
 		}
 	}
 
-	// populate Computed attributes
-	plan.VMID = types.Int64Value(int64(vmr.VmId()))
-	plan.Ostype = types.StringValue(config.OsType)
-	if config.Hostname == "" {
-		plan.Hostname = types.StringNull()
-	} else {
-		plan.Hostname = types.StringValue(config.Hostname)
+	// ensure Computed attributes get set, configured attributes should remain stable
+	err = UpdateLXCResourceModelFromAPI(ctx, vmr.VmId(), r.client, &plan, LXCStateConfig)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Creating LXC",
+			fmt.Sprintf("Could not read back state of created LXC %d, unexpected error:"+err.Error(), plan.VMID.ValueInt64()),
+		)
+		return
 	}
-	plan.Unprivileged = types.BoolValue(config.Unprivileged)
 
 	tflog.Trace(ctx, fmt.Sprintf("Setting state after creating LXC to: %+v", plan))
 	diags = resp.State.Set(ctx, plan)
@@ -250,7 +337,7 @@ func (r *lxcResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Reading LXC State",
-				fmt.Sprintf("Could not read state of LXC %d, unsepcted error:"+err.Error(), state.VMID.ValueInt64()),
+				fmt.Sprintf("Could not read state of LXC %d, unexpected error:"+err.Error(), state.VMID.ValueInt64()),
 			)
 			return
 		}
@@ -267,6 +354,13 @@ func (r *lxcResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan lxcResourceModel
 	diags := req.Plan.Get(ctx, &plan)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	var state lxcResourceModel
+	diags = req.State.Get(ctx, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -292,7 +386,37 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	}
 	vmr := pveapi.NewVmRef(id)
 	vmr.SetNode(plan.Node.ValueString())
-	vmr.SetVmType("lxc")
+	vmr.SetVmType(vmTypeLxc)
+
+	if state.RootFs.IsNull() != plan.RootFs.IsNull() || !state.RootFs.Equal(plan.RootFs) {
+		oldRootfs, err := rootfsAPIConfigFromStateValue(ctx, state.RootFs)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error constructing API struct from internal model",
+				"This is a provider bug. Please report it to the developers.\n\n"+err.Error())
+			return
+		}
+
+		newRootfs, err := rootfsAPIConfigFromStateValue(ctx, plan.RootFs)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error constructing API struct from internal model",
+				"This is a provider bug. Please report it to the developers.\n\n"+err.Error())
+			return
+		}
+
+		oldDisks := pveapi.QemuDevices{0: oldRootfs}
+		newDisks := pveapi.QemuDevices{0: newRootfs}
+		err = applyLxcDiskChanges(oldDisks, newDisks, vmr, r.client)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Updating LXC",
+				"Could not update LXC disks, unexpected error: "+err.Error(),
+			)
+			return
+		}
+		config.RootFs = newRootfs
+	}
 
 	err = config.UpdateConfig(vmr, r.client)
 	if err != nil {
@@ -337,13 +461,13 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		tflog.Trace(ctx, fmt.Sprintf("Rebooted LXC %d.", id))
 	}
 
-	var state lxcResourceModel
+	var newState lxcResourceModel
 
 	// carry over values not part of PVE state
-	state.Ostemplate = plan.Ostemplate
-	state.Password = plan.Password
+	newState.Ostemplate = state.Ostemplate
+	newState.Password = state.Password
 
-	err = UpdateLXCResourceModelFromAPI(ctx, id, r.client, &state, LXCStateEverything)
+	err = UpdateLXCResourceModelFromAPI(ctx, id, r.client, &newState, LXCStateEverything)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating LXC",
@@ -352,7 +476,7 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	if plan.Status.ValueString() != state.Status.ValueString() {
+	if plan.Status.ValueString() != newState.Status.ValueString() {
 		switch plan.Status.ValueString() {
 		case stateRunning:
 			tflog.Trace(ctx, "Starting LXC since status in plan set to "+plan.Status.ValueString())
@@ -377,7 +501,7 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		}
 	}
 
-	err = UpdateLXCResourceModelFromAPI(ctx, id, r.client, &state, LXCStateStatus)
+	err = UpdateLXCResourceModelFromAPI(ctx, id, r.client, &newState, LXCStateStatus)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating LXC",
@@ -386,8 +510,8 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	tflog.Trace(ctx, fmt.Sprintf("Setting state after updating LXC to: %+v", state))
-	diags = resp.State.Set(ctx, state)
+	tflog.Trace(ctx, fmt.Sprintf("Setting state after updating LXC to: %+v", newState))
+	diags = resp.State.Set(ctx, newState)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -429,7 +553,7 @@ func (r *lxcResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 
 	vmr := pveapi.NewVmRef(int(state.VMID.ValueInt64()))
 	vmr.SetNode(state.Node.ValueString())
-	vmr.SetVmType("lxc")
+	vmr.SetVmType(vmTypeLxc)
 
 	vmState, err := r.client.GetVmState(vmr)
 	if err != nil {
@@ -514,6 +638,20 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 		model.Ostype = types.StringValue(config.OsType)
 		model.Hostname = types.StringValue(config.Hostname)
 		model.Unprivileged = types.BoolValue(config.Unprivileged)
+
+		if len(config.RootFs) == 0 {
+			dm := rootfsModel{}
+			dmAttrs := dm.AttributeTypes()
+			model.RootFs = types.ObjectNull(dmAttrs)
+		} else {
+			dm := rootfsModel{}
+			dm.readFromAPIConfig(&config.RootFs)
+			m, diags := types.ObjectValueFrom(ctx, dm.AttributeTypes(), dm)
+			if diags.HasError() {
+				return errors.New("Unexpected error when reading rootfs from config")
+			}
+			model.RootFs = m
+		}
 	}
 
 	if sm&LXCStateStatus != 0 {
@@ -525,7 +663,7 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 	return nil
 }
 
-func apiConfigFromLXCResourceModel(_ context.Context, model *lxcResourceModel, config *pveapi.ConfigLxc) error {
+func apiConfigFromLXCResourceModel(ctx context.Context, model *lxcResourceModel, config *pveapi.ConfigLxc) error {
 	// Node set via VmRef
 	// VMID set via VmRef
 	config.Ostemplate = model.Ostemplate.ValueString()
@@ -542,5 +680,159 @@ func apiConfigFromLXCResourceModel(_ context.Context, model *lxcResourceModel, c
 		config.Unprivileged = model.Unprivileged.ValueBool()
 	}
 
+	var err error
+	if !model.RootFs.IsNull() && !model.RootFs.IsUnknown() {
+		config.RootFs, err = rootfsAPIConfigFromStateValue(ctx, model.RootFs)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func rootfsAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue) (pveapi.QemuDevice, error) {
+	if o.IsNull() {
+		return nil, nil
+	}
+
+	var dm rootfsModel
+	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return nil, errors.New("unable to create config object from virtio0 state value")
+	}
+	c := pveapi.QemuDevice{}
+	dm.writeToAPIConfig(&c)
+	return c, nil
+}
+
+func applyLxcDiskChanges(prevDisks, newDisks pveapi.QemuDevices, vmr *pveapi.VmRef, c *pveapi.Client) error {
+	// 1. Delete slots that either a. Don't exist in the new set or b. Have a different volume in the new set
+	deleteDisks := []pveapi.QemuDevice{}
+	for key, prevDisk := range prevDisks {
+		newDisk, ok := (newDisks)[key]
+		// The Rootfs can't be deleted
+		if ok && diskSlotName(newDisk) == "rootfs" {
+			continue
+		}
+		if !ok || (newDisk["volume"] != "" && prevDisk["volume"] != newDisk["volume"]) || (prevDisk["slot"] != newDisk["slot"]) {
+			deleteDisks = append(deleteDisks, prevDisk)
+		}
+	}
+	if len(deleteDisks) > 0 {
+		deleteDiskKeys := []string{}
+		for _, disk := range deleteDisks {
+			deleteDiskKeys = append(deleteDiskKeys, diskSlotName(disk))
+		}
+		params := map[string]any{}
+		params["delete"] = strings.Join(deleteDiskKeys, ", ")
+		if vmr.GetVmType() == vmTypeLxc {
+			if _, err := c.SetLxcConfig(vmr, params); err != nil {
+				return err
+			}
+		} else {
+			if _, err := c.SetVmConfig(vmr, params); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Create New Disks and Re-reference Slot-Changed Disks
+	newParams := map[string]any{}
+	for key, newDisk := range newDisks {
+		prevDisk, ok := prevDisks[key]
+		diskName := diskSlotName(newDisk)
+
+		if ok {
+			for k, v := range prevDisk {
+				_, ok := newDisk[k]
+				if !ok {
+					newDisk[k] = v
+				}
+			}
+		}
+
+		if !ok || newDisk["slot"] != prevDisk["slot"] {
+			newParams[diskName] = pveapi.FormatDiskParam(newDisk)
+		}
+	}
+	if len(newParams) > 0 {
+		if vmr.GetVmType() == vmTypeLxc {
+			if _, err := c.SetLxcConfig(vmr, newParams); err != nil {
+				return err
+			}
+		} else {
+			if _, err := c.SetVmConfig(vmr, newParams); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Move and Resize Existing Disks
+	for key, prevDisk := range prevDisks {
+		newDisk, ok := newDisks[key]
+		diskName := diskSlotName(newDisk)
+		if ok {
+			// 2. Move disks with mismatching storage
+			newStorage, ok := newDisk["storage"].(string)
+			if ok && newStorage != prevDisk["storage"] {
+				if vmr.GetVmType() == vmTypeLxc {
+					_, err := c.MoveLxcDisk(vmr, diskSlotName(prevDisk), newStorage)
+					if err != nil {
+						return err
+					}
+				} else {
+					_, err := c.MoveQemuDisk(vmr, diskSlotName(prevDisk), newStorage)
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+			// 3. Resize disks with different sizes
+			if err := processDiskResize(prevDisk, newDisk, diskName, vmr, c); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Update Volume info
+	apiResult, err := c.GetVmConfig(vmr)
+	if err != nil {
+		return err
+	}
+	for _, newDisk := range newDisks {
+		diskName := diskSlotName(newDisk)
+		apiConfigStr, ok := apiResult[diskName].(string)
+		if !ok {
+			return fmt.Errorf("Unable to read disk config from API as string, got a %T", apiResult[diskName])
+		}
+		apiDevice := pveapi.ParsePMConf(apiConfigStr, "volume")
+		newDisk["volume"] = apiDevice["volume"]
+	}
+
+	return nil
+}
+
+func diskSlotName(disk pveapi.QemuDevice) string {
+	diskType, ok := disk["type"].(string)
+	if !ok || diskType == "" {
+		diskType = "mp"
+	}
+	diskSlot, ok := disk["slot"].(int)
+	if !ok {
+		return "rootfs"
+	}
+	return diskType + strconv.Itoa(diskSlot)
+}
+
+func processDiskResize(prevDisk pveapi.QemuDevice, newDisk pveapi.QemuDevice, diskName string, vmr *pveapi.VmRef, c *pveapi.Client) error {
+	newSize, ok := newDisk["size"]
+	if ok && newSize != prevDisk["size"] {
+		_, err := c.ResizeQemuDiskRaw(vmr, diskName, newDisk["size"].(string))
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }

@@ -29,6 +29,9 @@ var (
 )
 
 const (
+	vmTypeQemu string = "qemu"
+	vmTypeLxc  string = "lxc"
+
 	stateRunning string = "running"
 	stateStopped string = "stopped"
 

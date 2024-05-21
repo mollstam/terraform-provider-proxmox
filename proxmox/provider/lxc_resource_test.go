@@ -37,13 +37,21 @@ resource "proxmox_lxc" "test" {
 	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
 
 	hostname = "wall-e"
+
+	rootfs = {
+		storage = "local-lvm"
+		size    = "1G"
+	}
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
 					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
+					testCheckLXCRootfsValuesInPve(ctx, &lxc, types.StringValue("local-lvm"), types.StringValue("1G")),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.storage", "local-lvm"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.size", "1G"),
 				),
 			},
 			{
@@ -53,13 +61,21 @@ resource "proxmox_lxc" "test" {
 	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
 	
 	hostname = "m-o"
+
+	rootfs = {
+		storage = "local-lvm"
+		size    = "2G"
+	}
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
 					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("m-o"), types.BoolValue(false)),
+					testCheckLXCRootfsValuesInPve(ctx, &lxc, types.StringValue("local-lvm"), types.StringValue("2G")),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "m-o"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.storage", "local-lvm"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.size", "2G"),
 				),
 			},
 		},
@@ -97,14 +113,14 @@ resource "proxmox_lxc" "test" {
 			},
 			{
 				Config: providerConfig + `
-resource "proxmox_lxc" "test" {
-	node         = "pve"
-	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
-	
-	hostname = "wall-e"
-	password = "sunday_clothes"
-}
-`,
+			resource "proxmox_lxc" "test" {
+				node         = "pve"
+				ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+				hostname = "wall-e"
+				password = "sunday_clothes"
+			}
+			`,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
 					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
@@ -353,6 +369,27 @@ func testCheckLXCValuesInPve(r *lxcResourceModel, node basetypes.StringValue, vm
 			gomega.Expect(r.Ostype).To(gomega.Equal(ostype))
 			gomega.Expect(r.Hostname).To(gomega.Equal(hostname))
 			gomega.Expect(r.Unprivileged).To(gomega.Equal(unprivileged))
+		})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+}
+
+func testCheckLXCRootfsValuesInPve(ctx context.Context, r *lxcResourceModel, storage basetypes.StringValue, size basetypes.StringValue) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		err := gomega.InterceptGomegaFailure(func() {
+			gomega.Expect(r.RootFs.IsNull()).To(gomega.BeFalseBecause("rootfs should not be null"))
+
+			var dm rootfsModel
+			diags := r.RootFs.As(ctx, &dm, basetypes.ObjectAsOptions{})
+			if diags.HasError() {
+				panic("error when reading rootfs from resource model")
+			}
+			gomega.Expect(dm.Storage).To(gomega.Equal(storage))
+			gomega.Expect(dm.Size).To(gomega.Equal(size))
 		})
 		if err != nil {
 			return err
