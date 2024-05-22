@@ -49,8 +49,9 @@ type lxcResourceModel struct {
 	Unprivileged types.Bool   `tfsdk:"unprivileged"`
 	Ostype       types.String `tfsdk:"ostype"`
 
-	Hostname types.String `tfsdk:"hostname"`
-	Password types.String `tfsdk:"password"`
+	Hostname      types.String `tfsdk:"hostname"`
+	Password      types.String `tfsdk:"password"`
+	SSHPublicKeys types.String `tfsdk:"ssh_public_keys"`
 
 	RootFs types.Object `tfsdk:"rootfs"`
 
@@ -215,6 +216,14 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 				Description: "Sets root password inside container.",
 				Optional:    true,
 				Sensitive:   true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"ssh_public_keys": schema.StringAttribute{
+				Description: "Setup public SSH keys (one key per line, OpenSSH format).",
+				Optional:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 					stringplanmodifier.RequiresReplace(),
@@ -543,6 +552,7 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	// carry over values not part of PVE state
 	newState.Ostemplate = state.Ostemplate
 	newState.Password = state.Password
+	newState.SSHPublicKeys = state.SSHPublicKeys
 
 	err = UpdateLXCResourceModelFromAPI(ctx, id, r.client, &newState, LXCStateEverything)
 	if err != nil {
@@ -766,6 +776,10 @@ func apiConfigFromLXCResourceModel(ctx context.Context, model *lxcResourceModel,
 
 	if !model.Password.IsNull() && !model.Password.IsUnknown() {
 		config.Password = model.Password.ValueString()
+	}
+
+	if !model.SSHPublicKeys.IsNull() && !model.SSHPublicKeys.IsUnknown() {
+		config.SSHPublicKeys = model.SSHPublicKeys.ValueString()
 	}
 
 	if !model.Unprivileged.IsNull() && !model.Unprivileged.IsUnknown() {

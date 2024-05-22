@@ -156,6 +156,56 @@ resource "proxmox_lxc" "test" {
 	})
 }
 
+func TestAccLXCResource_CreateAndUpdateSSHKeys(t *testing.T) {
+	var lxc lxcResourceModel
+
+	// changing ssh keys will recreate resource, hence its own test
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+	hostname = "wall-e"
+	ssh_public_keys = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDfnHfHWUoXXyGPgjFLwH8SE3MozO90AAQI9A338Bm0Srn6SJkdlOyaQdLXbvkTv1UTLhiDUR2KIsyNALYzpq5wNWirbMa8+8eBElrQwNwDP1WNdRW63lL4C01mdqMavqLiYoycOJjpOe7EmDgnNixIPesjBwPx5tHELJdHiLrU6Q== walle@test"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "ssh_public_keys", "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDfnHfHWUoXXyGPgjFLwH8SE3MozO90AAQI9A338Bm0Srn6SJkdlOyaQdLXbvkTv1UTLhiDUR2KIsyNALYzpq5wNWirbMa8+8eBElrQwNwDP1WNdRW63lL4C01mdqMavqLiYoycOJjpOe7EmDgnNixIPesjBwPx5tHELJdHiLrU6Q== walle@test"),
+				),
+			},
+			{
+				Config: providerConfig + `
+			resource "proxmox_lxc" "test" {
+				node         = "pve"
+				ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+				hostname = "wall-e"
+				ssh_public_keys = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCsPEwRz7XqtM0cIr9YtokMt6q7pt8Mz4h+nh+KC0WD163Puc5JZ0S9ZGcPX7fHObmXRquBZ1Ek4cBmi4SnY1V4/9bNWvDttFUVVhAwuLWJzf+pGyRnUZxl8VIwdLzGZvX6h0NWfwEIwjDyRZZW1VE/dlwyVTxUYwv2IhF8pdycNQ== walle@test"
+			}
+			`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "ssh_public_keys", "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCsPEwRz7XqtM0cIr9YtokMt6q7pt8Mz4h+nh+KC0WD163Puc5JZ0S9ZGcPX7fHObmXRquBZ1Ek4cBmi4SnY1V4/9bNWvDttFUVVhAwuLWJzf+pGyRnUZxl8VIwdLzGZvX6h0NWfwEIwjDyRZZW1VE/dlwyVTxUYwv2IhF8pdycNQ== walle@test"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccLXCResource_CreateAndUpdateUnprivileged(t *testing.T) {
 	var lxc lxcResourceModel
 
