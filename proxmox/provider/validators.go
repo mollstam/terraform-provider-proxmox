@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"regexp"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/helpers/validatordiag"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -94,4 +95,123 @@ func (v diskSizeValidator) ValidateString(ctx context.Context, request validator
 
 func DiskSizeValidator(description string) validator.String {
 	return diskSizeValidator{description}
+}
+
+var _ validator.String = ipValidator{}
+
+type ipValidator struct {
+	description string
+}
+
+func (v ipValidator) Description(_ context.Context) string {
+	return v.description
+}
+
+func (v ipValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v ipValidator) ValidateString(ctx context.Context, request validator.StringRequest, response *validator.StringResponse) {
+	if request.ConfigValue.IsNull() || request.ConfigValue.IsUnknown() {
+		return
+	}
+
+	val := request.ConfigValue
+
+	invalid := false
+	if val.Equal(types.StringValue("")) {
+		invalid = true
+	} else {
+		re := regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)\.(\d+)$`)
+		m := re.FindStringSubmatch(val.ValueString())
+		if m == nil {
+			invalid = true
+		} else {
+			if val, err := strconv.Atoi(m[1]); err != nil || val < 0 || val > 255 {
+				invalid = true
+			}
+			if val, err := strconv.Atoi(m[2]); err != nil || val < 0 || val > 255 {
+				invalid = true
+			}
+			if val, err := strconv.Atoi(m[3]); err != nil || val < 0 || val > 255 {
+				invalid = true
+			}
+			if val, err := strconv.Atoi(m[4]); err != nil || val < 0 || val > 255 {
+				invalid = true
+			}
+		}
+	}
+
+	if invalid {
+		response.Diagnostics.Append(validatordiag.InvalidAttributeValueMatchDiagnostic(
+			request.Path,
+			v.Description(ctx),
+			val.String(),
+		))
+	}
+}
+
+func IPValidator(description string) validator.String {
+	return ipValidator{description}
+}
+
+var _ validator.String = ipCidrValidator{}
+
+type ipCidrValidator struct {
+	description string
+}
+
+func (v ipCidrValidator) Description(_ context.Context) string {
+	return v.description
+}
+
+func (v ipCidrValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v ipCidrValidator) ValidateString(ctx context.Context, request validator.StringRequest, response *validator.StringResponse) {
+	if request.ConfigValue.IsNull() || request.ConfigValue.IsUnknown() {
+		return
+	}
+
+	val := request.ConfigValue
+
+	invalid := false
+	if val.Equal(types.StringValue("")) {
+		invalid = true
+	} else {
+		re := regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)\.(\d+)/(\d+)$`)
+		m := re.FindStringSubmatch(val.ValueString())
+		if m == nil {
+			invalid = true
+		} else {
+			if val, err := strconv.Atoi(m[1]); err != nil || val < 0 || val > 255 {
+				invalid = true
+			}
+			if val, err := strconv.Atoi(m[2]); err != nil || val < 0 || val > 255 {
+				invalid = true
+			}
+			if val, err := strconv.Atoi(m[3]); err != nil || val < 0 || val > 255 {
+				invalid = true
+			}
+			if val, err := strconv.Atoi(m[4]); err != nil || val < 0 || val > 255 {
+				invalid = true
+			}
+			if val, err := strconv.Atoi(m[5]); err != nil || val < 0 || val > 32 {
+				invalid = true
+			}
+		}
+	}
+
+	if invalid {
+		response.Diagnostics.Append(validatordiag.InvalidAttributeValueMatchDiagnostic(
+			request.Path,
+			v.Description(ctx),
+			val.String(),
+		))
+	}
+}
+
+func IPCidrValidator(description string) validator.String {
+	return ipCidrValidator{description}
 }

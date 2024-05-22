@@ -42,16 +42,28 @@ resource "proxmox_lxc" "test" {
 		storage = "local-lvm"
 		size    = "1G"
 	}
+
+	net = {
+		name   = "eth0"
+		bridge = "vmbr0"
+		ip     = "192.168.0.50/24"
+		gw     = "192.168.0.1"
+	}
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
 					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
 					testCheckLXCRootfsValuesInPve(ctx, &lxc, types.StringValue("local-lvm"), types.StringValue("1G")),
+					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("192.168.0.50/24"), types.StringValue("192.168.0.1")),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.storage", "local-lvm"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.size", "1G"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.name", "eth0"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.bridge", "vmbr0"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.ip", "192.168.0.50/24"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.gw", "192.168.0.1"),
 				),
 			},
 			{
@@ -66,16 +78,26 @@ resource "proxmox_lxc" "test" {
 		storage = "local-lvm"
 		size    = "2G"
 	}
+
+	net = {
+		name   = "eth0"
+		bridge = "vmbr0"
+		ip     = "dhcp"
+	}
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
 					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("m-o"), types.BoolValue(false)),
 					testCheckLXCRootfsValuesInPve(ctx, &lxc, types.StringValue("local-lvm"), types.StringValue("2G")),
+					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("dhcp"), types.StringNull()),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "m-o"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.storage", "local-lvm"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.size", "2G"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.name", "eth0"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.bridge", "vmbr0"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.ip", "dhcp"),
 				),
 			},
 		},
@@ -390,6 +412,29 @@ func testCheckLXCRootfsValuesInPve(ctx context.Context, r *lxcResourceModel, sto
 			}
 			gomega.Expect(dm.Storage).To(gomega.Equal(storage))
 			gomega.Expect(dm.Size).To(gomega.Equal(size))
+		})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+}
+
+func testCheckLXCNetValuesInPve(ctx context.Context, r *lxcResourceModel, name basetypes.StringValue, bridge basetypes.StringValue, ip basetypes.StringValue, gw basetypes.StringValue) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		err := gomega.InterceptGomegaFailure(func() {
+			gomega.Expect(r.Net.IsNull()).To(gomega.BeFalseBecause("net should not be null"))
+
+			var dm netModel
+			diags := r.Net.As(ctx, &dm, basetypes.ObjectAsOptions{})
+			if diags.HasError() {
+				panic("error when reading net from resource model")
+			}
+			gomega.Expect(dm.Name).To(gomega.Equal(name))
+			gomega.Expect(dm.Bridge).To(gomega.Equal(bridge))
+			gomega.Expect(dm.IP).To(gomega.Equal(ip))
+			gomega.Expect(dm.Gateway).To(gomega.Equal(gw))
 		})
 		if err != nil {
 			return err

@@ -53,6 +53,8 @@ type lxcResourceModel struct {
 	Password types.String `tfsdk:"password"`
 
 	RootFs types.Object `tfsdk:"rootfs"`
+
+	Net types.Object `tfsdk:"net"`
 }
 
 type rootfsModel struct {
@@ -96,6 +98,46 @@ func (m rootfsModel) writeToAPIConfig(c *pveapi.QemuDevice) {
 		(*c)["storage"] = parts[0]
 	} else {
 		(*c)["storage"] = m.Storage.ValueString()
+	}
+}
+
+type netModel struct {
+	Name    types.String `tfsdk:"name"`
+	Bridge  types.String `tfsdk:"bridge"`
+	IP      types.String `tfsdk:"ip"`
+	Gateway types.String `tfsdk:"gw"`
+}
+
+func (netModel) AttributeTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"name":   types.StringType,
+		"bridge": types.StringType,
+		"ip":     types.StringType,
+		"gw":     types.StringType,
+	}
+}
+
+func (m *netModel) readFromAPIConfig(c *pveapi.QemuDevice) {
+	if val, ok := (*c)["name"]; ok {
+		m.Name = types.StringValue(val.(string))
+	}
+	if val, ok := (*c)["bridge"]; ok {
+		m.Bridge = types.StringValue(val.(string))
+	}
+	if val, ok := (*c)["ip"]; ok {
+		m.IP = types.StringValue(val.(string))
+	}
+	if val, ok := (*c)["gw"]; ok && val != "" {
+		m.Gateway = types.StringValue(val.(string))
+	}
+}
+
+func (m netModel) writeToAPIConfig(c *pveapi.QemuDevice) {
+	(*c)["name"] = m.Name.ValueString()
+	(*c)["bridge"] = m.Bridge.ValueString()
+	(*c)["ip"] = m.IP.ValueString()
+	if !m.Gateway.IsUnknown() {
+		(*c)["gw"] = m.Gateway.ValueString()
 	}
 }
 
@@ -179,6 +221,7 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 				},
 			},
 			"rootfs": schemaRootFs(),
+			"net":    schemaNet(),
 		},
 	}
 }
@@ -207,6 +250,40 @@ func schemaRootFs() schema.Attribute {
 		},
 		PlanModifiers: []planmodifier.Object{
 			objectplanmodifier.UseStateForUnknown(),
+		},
+	}
+}
+
+func schemaNet() schema.Attribute {
+	return schema.SingleNestedAttribute{
+		Description: "Specifies the network interface for the container.",
+		Optional:    true,
+		Attributes: map[string]schema.Attribute{
+			"name": schema.StringAttribute{
+				Description: "Network interface name.",
+				Required:    true,
+			},
+			"bridge": schema.StringAttribute{
+				Description: "The interface to bridge this interface to.",
+				Required:    true,
+			},
+			"ip": schema.StringAttribute{
+				Description: "IPv4 CIDR or \"dhcp\".",
+				Required:    true,
+				Validators: []validator.String{
+					stringvalidator.Any(
+						IPCidrValidator("ip must be an IPv4 address with netmask in CIDR notation"),
+						stringvalidator.OneOf("dhcp"),
+					),
+				},
+			},
+			"gw": schema.StringAttribute{
+				Description: "IPv4",
+				Optional:    true,
+				Validators: []validator.String{
+					IPValidator("gw must be an IPv4 address"),
+				},
+			},
 		},
 	}
 }
@@ -652,6 +729,21 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 			}
 			model.RootFs = m
 		}
+
+		if len(config.Networks) == 0 {
+			dm := netModel{}
+			dmAttrs := dm.AttributeTypes()
+			model.Net = types.ObjectNull(dmAttrs)
+		} else {
+			dm := netModel{}
+			net0 := config.Networks[0]
+			dm.readFromAPIConfig(&net0)
+			m, diags := types.ObjectValueFrom(ctx, dm.AttributeTypes(), dm)
+			if diags.HasError() {
+				return errors.New("Unexpected error when reading net from config")
+			}
+			model.Net = m
+		}
 	}
 
 	if sm&LXCStateStatus != 0 {
@@ -688,6 +780,14 @@ func apiConfigFromLXCResourceModel(ctx context.Context, model *lxcResourceModel,
 		}
 	}
 
+	if !model.Net.IsNull() && !model.Net.IsUnknown() {
+		net0, err := netAPIConfigFromStateValue(ctx, model.Net)
+		if err != nil {
+			return err
+		}
+		config.Networks = pveapi.QemuDevices{0: net0}
+	}
+
 	return nil
 }
 
@@ -700,6 +800,21 @@ func rootfsAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue)
 	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
 	if diags.HasError() {
 		return nil, errors.New("unable to create config object from virtio0 state value")
+	}
+	c := pveapi.QemuDevice{}
+	dm.writeToAPIConfig(&c)
+	return c, nil
+}
+
+func netAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue) (pveapi.QemuDevice, error) {
+	if o.IsNull() {
+		return nil, nil
+	}
+
+	var dm netModel
+	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return nil, errors.New("unable to create config object from net0 state value")
 	}
 	c := pveapi.QemuDevice{}
 	dm.writeToAPIConfig(&c)
