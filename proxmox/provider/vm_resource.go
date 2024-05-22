@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -15,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
@@ -64,7 +66,7 @@ type vmResourceModel struct {
 	Status types.String `tfsdk:"status"`
 	Agent  types.Bool   `tfsdk:"agent"`
 
-	Clone types.Int64 `tfsdk:"clone"`
+	Clone types.String `tfsdk:"clone"`
 
 	Sockets types.Int64 `tfsdk:"sockets"`
 	Cores   types.Int64 `tfsdk:"cores"`
@@ -196,11 +198,11 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Computed:    true,
 				Default:     int64default.StaticInt64(16),
 			},
-			"clone": schema.Int64Attribute{
-				Description: "Create a full clone of virtual machine/template with this VMID.",
+			"clone": schema.StringAttribute{
+				Description: "Create a full clone of virtual machine/template with this name or VMID.",
 				Optional:    true,
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.RequiresReplaceIfConfigured(),
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplaceIfConfigured(),
 				},
 			},
 			"virtio0":  schemaVirtio(),
@@ -318,8 +320,22 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		*fullClone = 0
 		config.FullClone = fullClone
 
-		srcvmr := pveapi.NewVmRef(int(plan.Clone.ValueInt64()))
-		srcvmr.SetNode(plan.Node.ValueString())
+		var srcvmr *pveapi.VmRef
+		if cloneID, err := strconv.ParseInt(plan.Clone.ValueString(), 10, 64); err == nil {
+			srcvmr = pveapi.NewVmRef(int(cloneID))
+			// I think its possible the clone template is not on the same node?
+			srcvmr.SetNode(plan.Node.ValueString())
+		} else {
+			srcvmr, err = r.client.GetVmRefByName(plan.Clone.ValueString())
+			if err != nil {
+				resp.Diagnostics.AddError(
+					"Error Creating VM",
+					fmt.Sprintf("Could not clone VM, no template with ID/name '%s' could be found", plan.Clone.ValueString()),
+				)
+				return
+			}
+		}
+
 		err = config.CloneVm(srcvmr, vmr, r.client)
 		if err != nil {
 			resp.Diagnostics.AddError(

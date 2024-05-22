@@ -296,7 +296,7 @@ func TestAccVMResource_CreateCloneOfTemplate(t *testing.T) {
 
 	ctx := testutil.GetTestLoggingContext()
 
-	template, err := createTemplateInPve(ctx, 200, "pve", 16, 5)
+	template, err := createTemplateInPve(ctx, "Test-Template-01", 200, "pve", 16, 5)
 	if err != nil {
 		t.Error("Error during setup: " + err.Error())
 		return
@@ -314,7 +314,7 @@ resource "proxmox_vm" "test_clone" {
 	name = "m-o"
 	description = "Microbe-Obliterator"
 	
-	clone = 200
+	clone = "200"
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
@@ -333,13 +333,55 @@ resource "proxmox_vm" "test_clone" {
 		},
 	})
 }
+func TestAccVMResource_CreateCloneOfTemplateByName(t *testing.T) {
+	var vm vmResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	template, err := createTemplateInPve(ctx, "Test-Template-01", 200, "pve", 16, 5)
+	if err != nil {
+		t.Error("Error during setup: " + err.Error())
+		return
+	}
+	cleanUpFunc := destroyVMInPve(template)
+	defer cleanUpFunc()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test_clone" {
+	node = "pve"
+	name = "m-o"
+	description = "Microbe-Obliterator"
+	
+	clone = "Test-Template-01"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test_clone", &vm),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
+					testCheckVMStatusInPve(&vm, "running"),
+					testCheckVMIsCloneOf(&vm, template),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "vmid", "100"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "name", "m-o"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "description", "Microbe-Obliterator"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "status", "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "clone", "Test-Template-01"),
+				),
+			},
+		},
+	})
+}
 
 func TestAccVMResource_CreateAndUpdateToClone_ShouldBeRecreatedAsClone(t *testing.T) {
 	var vm vmResourceModel
 
 	ctx := testutil.GetTestLoggingContext()
 
-	template, err := createTemplateInPve(ctx, 200, "pve", 16, 5)
+	template, err := createTemplateInPve(ctx, "Test-Template-01", 200, "pve", 16, 5)
 	if err != nil {
 		t.Error("Error during setup: " + err.Error())
 		return
@@ -376,7 +418,7 @@ resource "proxmox_vm" "test_to_be_clone" {
 	name = "m-o"
 	description = "Microbe-Obliterator"
 
-	clone = 200
+	clone = "200"
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
@@ -401,7 +443,7 @@ func TestAccVMResource_CreateCloneAndUpdateToAnotherClone_ShouldBeRecreated(t *t
 
 	ctx := testutil.GetTestLoggingContext()
 
-	template1, err := createTemplateInPve(ctx, 200, "pve", 16, 5)
+	template1, err := createTemplateInPve(ctx, "Test-Template-01", 200, "pve", 16, 5)
 	if err != nil {
 		t.Error("Error during setup: " + err.Error())
 		return
@@ -409,7 +451,7 @@ func TestAccVMResource_CreateCloneAndUpdateToAnotherClone_ShouldBeRecreated(t *t
 	cleanUpFunc1 := destroyVMInPve(template1)
 	defer cleanUpFunc1()
 
-	template2, err := createTemplateInPve(ctx, 201, "pve", 16, 7)
+	template2, err := createTemplateInPve(ctx, "Test-Template-02", 201, "pve", 16, 7)
 	if err != nil {
 		t.Error("Error during setup: " + err.Error())
 		return
@@ -427,7 +469,7 @@ resource "proxmox_vm" "test_clone" {
 	name = "m-o"
 	description = "Microbe-Obliterator"
 
-	clone = 200
+	clone = "200"
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
@@ -450,7 +492,7 @@ resource "proxmox_vm" "test_clone" {
 	name = "m-o"
 	description = "Microbe-Obliterator"
 
-	clone = 201
+	clone = "201"
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
@@ -794,11 +836,12 @@ func stopVMInPve(r *vmResourceModel) func() {
 	}
 }
 
-func createTemplateInPve(ctx context.Context, vmid int, node string, memory int, size int) (*vmResourceModel, error) {
+func createTemplateInPve(ctx context.Context, name string, vmid int, node string, memory int, size int) (*vmResourceModel, error) {
 	ref := pveapi.NewVmRef(vmid)
 	ref.SetNode(node)
 
 	config := pveapi.ConfigQemu{}
+	config.Name = name
 	config.Memory = memory
 
 	config.Disks = &pveapi.QemuStorages{
