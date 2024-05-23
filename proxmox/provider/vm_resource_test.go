@@ -2,9 +2,11 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -31,8 +33,6 @@ resource "proxmox_vm" "test" {
 	name        = "wall-e"
 	description = "Waste Allocation Load Lifter: Earth-Class"
 
-	agent = true
-
 	sockets = 2
 	cores   = 2
 	memory  = 32
@@ -48,6 +48,11 @@ resource "proxmox_vm" "test" {
 		size    = 10
 		storage = "local-lvm"
 	}
+	
+	net = {
+		name   = "eth0"
+		bridge = "vmbr0"
+	}
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
@@ -60,7 +65,6 @@ resource "proxmox_vm" "test" {
 					resource.TestCheckResourceAttr("proxmox_vm.test", "name", "wall-e"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "description", "Waste Allocation Load Lifter: Earth-Class"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
-					resource.TestCheckResourceAttr("proxmox_vm.test", "agent", "true"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "sockets", "2"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "cores", "2"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "32"),
@@ -79,8 +83,6 @@ resource "proxmox_vm" "test" {
 	name        = "m-o"
 	description = "Microbe-Obliterator"
 
-	agent = false
-
 	sockets = 1
 	cores   = 1
 	memory  = 40
@@ -90,6 +92,17 @@ resource "proxmox_vm" "test" {
 		size    = 30
 		storage = "local-lvm"
 	}
+
+	virtio1 = {
+		media   = "disk"
+		size    = 10
+		storage = "local-lvm"
+	}
+	
+	net = {
+		name   = "eth0"
+		bridge = "vmbr0"
+    }
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
@@ -101,7 +114,6 @@ resource "proxmox_vm" "test" {
 					resource.TestCheckResourceAttr("proxmox_vm.test", "name", "m-o"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "description", "Microbe-Obliterator"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
-					resource.TestCheckResourceAttr("proxmox_vm.test", "agent", "false"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "sockets", "1"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "cores", "1"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "40"),
@@ -134,6 +146,56 @@ resource "proxmox_vm" "test" {
 					resource.TestCheckNoResourceAttr("proxmox_vm.test", "name"),
 					resource.TestCheckNoResourceAttr("proxmox_vm.test", "description"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccVMResource_CreateWithAgent_IpCanBeRead(t *testing.T) {
+	var vm vmResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test" {
+	node = "pve"
+
+	agent = true
+	clone = 300
+
+	memory = 2048
+
+	virtio0 = {
+		media   = "disk"
+		size    = 20
+		storage = "local-lvm"
+	}
+	
+	net = {
+		name   = "eth0"
+		bridge = "vnet0"
+		ip     = "dhcp"
+    }
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("Copy-of-VM-agent-test-template"), types.StringNull(), types.Int64Value(1), types.Int64Value(1), types.Int64Value(2048)),
+					testCheckVMStatusInPve(&vm, "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
+					resource.TestCheckResourceAttrWith("proxmox_vm.test", "ipv4_address", func(value string) error {
+						prefix := "10.0.0."
+						if !strings.HasPrefix(value, prefix) {
+							return errors.New("Expected ipv4_address to start with " + prefix)
+						}
+						return nil
+					}),
 				),
 			},
 		},

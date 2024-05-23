@@ -13,7 +13,7 @@ import (
 var TestClient *pveapi.Client
 
 const (
-	apiURL      string = "https://192.168.56.102:8006/api2/json"
+	apiURL      string = "https://127.0.0.1:8806/api2/json"
 	apiUsername string = "root@pam"
 	apiPassword string = "123123"
 	tlsInsecure bool   = true

@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -72,6 +75,10 @@ type vmResourceModel struct {
 	Cores   types.Int64 `tfsdk:"cores"`
 	Memory  types.Int64 `tfsdk:"memory"`
 
+	IPV4Address types.String `tfsdk:"ipv4_address"`
+
+	Net types.Object `tfsdk:"net"`
+
 	Virtio0  types.Object `tfsdk:"virtio0"`
 	Virtio1  types.Object `tfsdk:"virtio1"`
 	Virtio2  types.Object `tfsdk:"virtio2"`
@@ -88,6 +95,11 @@ type vmResourceModel struct {
 	Virtio13 types.Object `tfsdk:"virtio13"`
 	Virtio14 types.Object `tfsdk:"virtio14"`
 	Virtio15 types.Object `tfsdk:"virtio15"`
+
+	Ide0 types.Object `tfsdk:"ide0"`
+	Ide1 types.Object `tfsdk:"ide1"`
+	Ide2 types.Object `tfsdk:"ide2"`
+	Ide3 types.Object `tfsdk:"ide3"`
 }
 
 type virtioModel struct {
@@ -122,11 +134,83 @@ func (m virtioModel) writeToAPIConfig(c *pveapi.QemuVirtIOStorage) {
 	}
 }
 
+type ideModel struct {
+	Media types.String `tfsdk:"media"`
+	File  types.String `tfsdk:"file"`
+}
+
+func (ideModel) AttributeTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"media": types.StringType,
+		"file":  types.StringType,
+	}
+}
+
+func (m *ideModel) readFromAPIConfig(c *pveapi.QemuIdeStorage) {
+	m.Media = types.StringValue(mediaCdrom)
+	m.File = types.StringValue(fmt.Sprintf("%s:%s", c.CdRom.Iso.Storage, c.CdRom.Iso.File))
+}
+
+func (m ideModel) writeToAPIConfig(c *pveapi.QemuIdeStorage) {
+	parts := strings.Split(m.File.ValueString(), ":")
+	if len(parts) > 1 {
+		re := regexp.MustCompile(`^iso/(.*)$`)
+		storage := parts[0]
+		iso := parts[1]
+		if match := re.FindStringSubmatch(iso); match != nil {
+			iso = match[1]
+		}
+		c.CdRom = &pveapi.QemuCdRom{
+			Iso: &pveapi.IsoFile{
+				Storage: storage,
+				File:    iso,
+			},
+		}
+	}
+}
+
+type vmNetModel struct {
+	Model      types.String `tfsdk:"model"`
+	Bridge     types.String `tfsdk:"bridge"`
+	MACAddress types.String `tfsdk:"mac_address"`
+}
+
+func (vmNetModel) AttributeTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"model":       types.StringType,
+		"bridge":      types.StringType,
+		"mac_address": types.StringType,
+	}
+}
+
+func (m *vmNetModel) readFromAPIConfig(c *pveapi.QemuDevice) {
+	if val, ok := (*c)["model"]; ok {
+		m.Model = types.StringValue(val.(string))
+	}
+	if val, ok := (*c)["bridge"]; ok {
+		m.Bridge = types.StringValue(val.(string))
+	}
+	if val, ok := (*c)["macaddr"]; ok {
+		m.MACAddress = types.StringValue(val.(string))
+	}
+}
+
+func (m vmNetModel) writeToAPIConfig(c *pveapi.QemuDevice) {
+	if !m.Model.IsUnknown() {
+		(*c)["model"] = m.Model.ValueString()
+	}
+	(*c)["bridge"] = m.Bridge.ValueString()
+	if !m.MACAddress.IsUnknown() {
+		(*c)["macaddr"] = m.MACAddress.ValueString()
+	}
+}
+
 type VMStateMask uint8
 
 const (
 	VMStateConfig VMStateMask = 1 << iota
 	VMStateStatus
+	VMStateNet
 
 	VMStateEverything VMStateMask = 0xff
 )
@@ -154,10 +238,12 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 			"name": schema.StringAttribute{
 				Description: "Set a name for the VM. Only used on the configuration web interface.",
 				Optional:    true,
+				Computed:    true,
 			},
 			"description": schema.StringAttribute{
 				Description: "Description for the VM. Shown in the web-interface VM's summary. This is saved as comment inside the configuration file.",
 				Optional:    true,
+				Computed:    true,
 			},
 			"status": schema.StringAttribute{
 				Description: "QEMU process status.",
@@ -205,6 +291,9 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 					stringplanmodifier.RequiresReplaceIfConfigured(),
 				},
 			},
+
+			"net": schemaVMNet(),
+
 			"virtio0":  schemaVirtio(),
 			"virtio1":  schemaVirtio(),
 			"virtio2":  schemaVirtio(),
@@ -221,6 +310,16 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 			"virtio13": schemaVirtio(),
 			"virtio14": schemaVirtio(),
 			"virtio15": schemaVirtio(),
+
+			"ide0": schemaIde(),
+			"ide1": schemaIde(),
+			"ide2": schemaIde(),
+			"ide3": schemaIde(),
+
+			"ipv4_address": schema.StringAttribute{
+				Description: "Assigned/resolved IPv4 address of the VM.",
+				Computed:    true,
+			},
 		},
 	}
 }
@@ -248,11 +347,59 @@ func schemaVirtio() schema.Attribute {
 			},
 			"size": schema.Int64Attribute{
 				Description: "Volume size in GB.",
-				Required:    true,
+				Optional:    true,
 			},
 			"storage": schema.StringAttribute{
 				Description: "The storage identifier.",
+				Optional:    true,
+			},
+		},
+	}
+}
+
+func schemaIde() schema.Attribute {
+	return schema.SingleNestedAttribute{
+		Description: "Use volume as IDE hard disk.",
+		Optional:    true,
+		Attributes: map[string]schema.Attribute{
+			"media": schema.StringAttribute{
+				Description: "The type of media for this volume (currently only cdrom supported).",
 				Required:    true,
+				Validators: []validator.String{
+					stringvalidator.OneOf([]string{mediaCdrom}...),
+				},
+			},
+			"file": schema.StringAttribute{
+				Description: "ISO identifier",
+				Optional:    true,
+				Computed:    true,
+			},
+		},
+	}
+}
+
+func schemaVMNet() schema.Attribute {
+	return schema.SingleNestedAttribute{
+		Description: "Specifies the network device on a VM.",
+		Optional:    true,
+		Attributes: map[string]schema.Attribute{
+			"model": schema.StringAttribute{
+				Description: "Network device model.",
+				Required:    false,
+				Computed:    true,
+				Default:     stringdefault.StaticString("virtio"),
+			},
+			"bridge": schema.StringAttribute{
+				Description: "The interface to bridge this interface to.",
+				Required:    true,
+			},
+			"mac_address": schema.StringAttribute{
+				Description: "The hardware address.",
+				Required:    false,
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -389,8 +536,15 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 		}
 	}
 
-	// populate Computed attributes
-	plan.VMID = types.Int64Value(int64(vmr.VmId()))
+	// populate Computed attributes by reading back the entire state from API
+	err = UpdateVMResourceModelFromAPI(ctx, vmr.VmId(), r.client, &plan, VMStateEverything)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Creating VM",
+			"Could not read back VM state after creation, unexpected error: "+err.Error(),
+		)
+		return
+	}
 
 	tflog.Trace(ctx, fmt.Sprintf("Setting state after creating VM to: %+v", plan))
 	diags = resp.State.Set(ctx, plan)
@@ -669,6 +823,69 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 		tflog.Trace(ctx, ".. updated status: "+status)
 	}
 
+	var ipv4 string
+	if sm&VMStateNet != 0 && len(config.QemuNetworks) > 0 {
+		net0 := config.QemuNetworks[0]
+		macRe := regexp.MustCompile(`([a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}`)
+		mac := ""
+		if val, ok := net0["macaddr"]; ok {
+			mac = strings.ToLower(macRe.FindString(val.(string)))
+		}
+		if mac != "" && config.Agent == 1 {
+			dl := time.After(time.Minute * 5)
+			ipv4chan := make(chan string)
+			errchan := make(chan error)
+			stopchan := make(chan bool)
+			defer func() {
+				select {
+				case stopchan <- true:
+				default:
+				}
+			}()
+			go func() {
+				for {
+					select {
+					case <-stopchan:
+						return
+					default:
+					}
+
+					interfaces, err := client.GetVmAgentNetworkInterfaces(vmr)
+					if err != nil {
+						if strings.Contains(err.Error(), "500 QEMU guest agent is not running") {
+							time.Sleep(2 * time.Second)
+							continue
+						}
+						errchan <- err
+						return
+					}
+					if len(interfaces) > 0 {
+						for _, iface := range interfaces {
+							if strings.ToLower(iface.MACAddress) == mac {
+								for _, addr := range iface.IPAddresses {
+									if addr.IsGlobalUnicast() && addr.To4() != nil {
+										ipv4chan <- addr.String()
+										return
+									}
+								}
+							}
+						}
+					}
+					errchan <- errors.New("Got answer from guest agent but unable to read a IP address from it")
+					return
+				}
+			}()
+
+			select {
+			case <-dl:
+				return errors.New("timeout waiting for agent to start")
+			case err = <-errchan:
+				return err
+			case ipv4 = <-ipv4chan:
+			}
+		}
+	}
+
 	if sm&VMStateConfig != 0 {
 		model.Node = types.StringValue(config.Node)
 		model.VMID = types.Int64Value(int64(config.VmID))
@@ -689,6 +906,21 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 		model.Sockets = types.Int64Value(int64(config.QemuSockets))
 		model.Cores = types.Int64Value(int64(config.QemuCores))
 		model.Memory = types.Int64Value(int64(config.Memory))
+
+		if len(config.QemuNetworks) == 0 {
+			dm := vmNetModel{}
+			dmAttrs := dm.AttributeTypes()
+			model.Net = types.ObjectNull(dmAttrs)
+		} else {
+			dm := vmNetModel{}
+			net0 := config.QemuNetworks[0]
+			dm.readFromAPIConfig(&net0)
+			m, diags := types.ObjectValueFrom(ctx, dm.AttributeTypes(), dm)
+			if diags.HasError() {
+				return errors.New("Unexpected error when reading net from config")
+			}
+			model.Net = m
+		}
 
 		if config.Disks == nil || config.Disks.VirtIO == nil {
 			dm := virtioModel{}
@@ -790,9 +1022,45 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 				return err
 			}
 		}
+
+		if config.Disks == nil || config.Disks.Ide == nil {
+			dm := ideModel{}
+			dmAttrs := dm.AttributeTypes()
+			model.Ide0 = types.ObjectNull(dmAttrs)
+			model.Ide1 = types.ObjectNull(dmAttrs)
+			model.Ide2 = types.ObjectNull(dmAttrs)
+			model.Ide3 = types.ObjectNull(dmAttrs)
+		} else {
+			model.Ide0, err = ideStateValueFromAPIConfig(ctx, config.Disks.Ide.Disk_0)
+			if err != nil {
+				return err
+			}
+
+			model.Ide1, err = ideStateValueFromAPIConfig(ctx, config.Disks.Ide.Disk_1)
+			if err != nil {
+				return err
+			}
+
+			model.Ide2, err = ideStateValueFromAPIConfig(ctx, config.Disks.Ide.Disk_2)
+			if err != nil {
+				return err
+			}
+
+			model.Ide3, err = ideStateValueFromAPIConfig(ctx, config.Disks.Ide.Disk_3)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	if sm&VMStateStatus != 0 {
 		model.Status = types.StringValue(status)
+	}
+	if sm&VMStateNet != 0 {
+		if ipv4 != "" {
+			model.IPV4Address = types.StringValue(ipv4)
+		} else {
+			model.IPV4Address = types.StringNull()
+		}
 	}
 
 	tflog.Trace(ctx, fmt.Sprintf("Updated vmResourceModel from PVE API, model is now %+v", model), map[string]any{"vmid": vmid, "statemask": sm})
@@ -809,7 +1077,22 @@ func virtioStateValueFromAPIConfig(ctx context.Context, c *pveapi.QemuVirtIOStor
 	dm.readFromAPIConfig(c)
 	m, diags := types.ObjectValueFrom(ctx, dm.AttributeTypes(), dm)
 	if diags.HasError() {
-		return types.Object{}, errors.New("Unexpected error when reading virtio0 from config")
+		return types.Object{}, errors.New("Unexpected error when reading virtio from config")
+	}
+
+	return m, nil
+}
+
+func ideStateValueFromAPIConfig(ctx context.Context, c *pveapi.QemuIdeStorage) (types.Object, error) {
+	dm := ideModel{} // create instance to gain access to AttributeTypes() below for nil branch...
+	if c == nil {
+		return types.ObjectNull(dm.AttributeTypes()), nil
+	}
+
+	dm.readFromAPIConfig(c)
+	m, diags := types.ObjectValueFrom(ctx, dm.AttributeTypes(), dm)
+	if diags.HasError() {
+		return types.Object{}, errors.New("Unexpected error when reading ide from config")
 	}
 
 	return m, nil
@@ -830,8 +1113,17 @@ func apiConfigFromVMResourceModel(ctx context.Context, model *vmResourceModel, c
 	config.QemuCores = int(model.Cores.ValueInt64())
 	config.Memory = int(model.Memory.ValueInt64())
 
+	if !model.Net.IsNull() && !model.Net.IsUnknown() {
+		net0, err := vmNetAPIConfigFromStateValue(ctx, model.Net)
+		if err != nil {
+			return err
+		}
+		config.QemuNetworks = pveapi.QemuDevices{0: net0}
+	}
+
 	// even if we have no disks in state we need empty structs for API client to consider it and e.g. emit delete actions
 	config.Disks = &pveapi.QemuStorages{
+		Ide:    &pveapi.QemuIdeDisks{},
 		VirtIO: &pveapi.QemuVirtIODisks{},
 	}
 	if !(model.Virtio0.IsNull() && model.Virtio1.IsNull() && model.Virtio2.IsNull() && model.Virtio3.IsNull() && model.Virtio4.IsNull() && model.Virtio5.IsNull() && model.Virtio6.IsNull() && model.Virtio7.IsNull() && model.Virtio8.IsNull() && model.Virtio9.IsNull() && model.Virtio10.IsNull() && model.Virtio11.IsNull() && model.Virtio12.IsNull() && model.Virtio13.IsNull() && model.Virtio14.IsNull() && model.Virtio15.IsNull()) {
@@ -902,6 +1194,26 @@ func apiConfigFromVMResourceModel(ctx context.Context, model *vmResourceModel, c
 			return err
 		}
 	}
+	if !(model.Ide0.IsNull() && model.Ide1.IsNull() && model.Ide2.IsNull() && model.Ide3.IsNull()) {
+		var err error
+
+		config.Disks.Ide.Disk_0, err = ideAPIConfigFromStateValue(ctx, model.Ide0)
+		if err != nil {
+			return err
+		}
+		config.Disks.Ide.Disk_1, err = ideAPIConfigFromStateValue(ctx, model.Ide1)
+		if err != nil {
+			return err
+		}
+		config.Disks.Ide.Disk_2, err = ideAPIConfigFromStateValue(ctx, model.Ide2)
+		if err != nil {
+			return err
+		}
+		config.Disks.Ide.Disk_3, err = ideAPIConfigFromStateValue(ctx, model.Ide3)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -914,10 +1226,40 @@ func virtioAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue)
 	var dm virtioModel
 	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
 	if diags.HasError() {
-		return nil, errors.New("unable to create config object from virtio0 state value")
+		return nil, errors.New("unable to create config object from virtio state value")
 	}
 	c := &pveapi.QemuVirtIOStorage{}
 	dm.writeToAPIConfig(c)
+	return c, nil
+}
+
+func ideAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue) (*pveapi.QemuIdeStorage, error) {
+	if o.IsNull() {
+		return nil, nil
+	}
+
+	var dm ideModel
+	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return nil, errors.New("unable to create config object from ide state value")
+	}
+	c := &pveapi.QemuIdeStorage{}
+	dm.writeToAPIConfig(c)
+	return c, nil
+}
+
+func vmNetAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue) (pveapi.QemuDevice, error) {
+	if o.IsNull() {
+		return nil, nil
+	}
+
+	var dm vmNetModel
+	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return nil, errors.New("unable to create config object from net state value")
+	}
+	c := pveapi.QemuDevice{}
+	dm.writeToAPIConfig(&c)
 	return c, nil
 }
 

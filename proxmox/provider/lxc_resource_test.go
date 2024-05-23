@@ -476,7 +476,7 @@ func testCheckLXCNetValuesInPve(ctx context.Context, r *lxcResourceModel, name b
 		err := gomega.InterceptGomegaFailure(func() {
 			gomega.Expect(r.Net.IsNull()).To(gomega.BeFalseBecause("net should not be null"))
 
-			var dm netModel
+			var dm lxcNetModel
 			diags := r.Net.As(ctx, &dm, basetypes.ObjectAsOptions{})
 			if diags.HasError() {
 				panic("error when reading net from resource model")

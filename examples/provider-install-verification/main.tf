@@ -7,7 +7,7 @@ terraform {
 }
 
 provider "proxmox" {
-  api_url = "https://192.168.56.102:8006/api2/json"
+  api_url = "https://127.0.0.1:8806/api2/json"
 
   debug        = true
   tls_insecure = true

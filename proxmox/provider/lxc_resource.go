@@ -102,14 +102,14 @@ func (m rootfsModel) writeToAPIConfig(c *pveapi.QemuDevice) {
 	}
 }
 
-type netModel struct {
+type lxcNetModel struct {
 	Name    types.String `tfsdk:"name"`
 	Bridge  types.String `tfsdk:"bridge"`
 	IP      types.String `tfsdk:"ip"`
 	Gateway types.String `tfsdk:"gw"`
 }
 
-func (netModel) AttributeTypes() map[string]attr.Type {
+func (lxcNetModel) AttributeTypes() map[string]attr.Type {
 	return map[string]attr.Type{
 		"name":   types.StringType,
 		"bridge": types.StringType,
@@ -118,7 +118,7 @@ func (netModel) AttributeTypes() map[string]attr.Type {
 	}
 }
 
-func (m *netModel) readFromAPIConfig(c *pveapi.QemuDevice) {
+func (m *lxcNetModel) readFromAPIConfig(c *pveapi.QemuDevice) {
 	if val, ok := (*c)["name"]; ok {
 		m.Name = types.StringValue(val.(string))
 	}
@@ -133,7 +133,7 @@ func (m *netModel) readFromAPIConfig(c *pveapi.QemuDevice) {
 	}
 }
 
-func (m netModel) writeToAPIConfig(c *pveapi.QemuDevice) {
+func (m lxcNetModel) writeToAPIConfig(c *pveapi.QemuDevice) {
 	(*c)["name"] = m.Name.ValueString()
 	(*c)["bridge"] = m.Bridge.ValueString()
 	(*c)["ip"] = m.IP.ValueString()
@@ -230,7 +230,7 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 				},
 			},
 			"rootfs": schemaRootFs(),
-			"net":    schemaNet(),
+			"net":    schemaLxcNet(),
 		},
 	}
 }
@@ -263,7 +263,7 @@ func schemaRootFs() schema.Attribute {
 	}
 }
 
-func schemaNet() schema.Attribute {
+func schemaLxcNet() schema.Attribute {
 	return schema.SingleNestedAttribute{
 		Description: "Specifies the network interface for the container.",
 		Optional:    true,
@@ -741,11 +741,11 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 		}
 
 		if len(config.Networks) == 0 {
-			dm := netModel{}
+			dm := lxcNetModel{}
 			dmAttrs := dm.AttributeTypes()
 			model.Net = types.ObjectNull(dmAttrs)
 		} else {
-			dm := netModel{}
+			dm := lxcNetModel{}
 			net0 := config.Networks[0]
 			dm.readFromAPIConfig(&net0)
 			m, diags := types.ObjectValueFrom(ctx, dm.AttributeTypes(), dm)
@@ -795,7 +795,7 @@ func apiConfigFromLXCResourceModel(ctx context.Context, model *lxcResourceModel,
 	}
 
 	if !model.Net.IsNull() && !model.Net.IsUnknown() {
-		net0, err := netAPIConfigFromStateValue(ctx, model.Net)
+		net0, err := lxcNetAPIConfigFromStateValue(ctx, model.Net)
 		if err != nil {
 			return err
 		}
@@ -820,15 +820,15 @@ func rootfsAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue)
 	return c, nil
 }
 
-func netAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue) (pveapi.QemuDevice, error) {
+func lxcNetAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue) (pveapi.QemuDevice, error) {
 	if o.IsNull() {
 		return nil, nil
 	}
 
-	var dm netModel
+	var dm lxcNetModel
 	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
 	if diags.HasError() {
-		return nil, errors.New("unable to create config object from net0 state value")
+		return nil, errors.New("unable to create config object from net state value")
 	}
 	c := pveapi.QemuDevice{}
 	dm.writeToAPIConfig(&c)
