@@ -382,6 +382,7 @@ func schemaVMNet() schema.Attribute {
 	return schema.SingleNestedAttribute{
 		Description: "Specifies the network device on a VM.",
 		Optional:    true,
+		Computed:    true,
 		Attributes: map[string]schema.Attribute{
 			"model": schema.StringAttribute{
 				Description: "Network device model.",
