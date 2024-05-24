@@ -441,87 +441,109 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 	}
 	tflog.Trace(ctx, fmt.Sprintf("Creating VM from model: %+v", plan))
 
-	id, err := getIDToUse(plan.VMID, r.client)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error Determining VM ID",
-			"Unexpected error when getting next free VM ID from the API. If you can't solve this error please report it to the provider developers.\n\n"+err.Error())
-		return
-	}
-	tflog.Trace(ctx, fmt.Sprintf("Creating with VMID %d", id))
-	vmr := pveapi.NewVmRef(id)
-	vmr.SetNode(plan.Node.ValueString())
+	var vmr *pveapi.VmRef
 
-	if plan.Clone.IsNull() {
-		err = config.Create(vmr, r.client)
+	// run in a loop so we can retry if ID collision, not beautiful
+	for {
+		id, err := getIDToUse(plan.VMID, r.client)
 		if err != nil {
 			resp.Diagnostics.AddError(
-				"Error Creating VM",
-				"Could not create VM, unexpected error: "+err.Error(),
-			)
+				"Error Determining VM ID",
+				"Unexpected error when getting next free VM ID from the API. If you can't solve this error please report it to the provider developers.\n\n"+err.Error())
 			return
 		}
-		tflog.Trace(ctx, "Created VM")
-	} else {
-		fullClone := new(int)
-		*fullClone = 0
-		config.FullClone = fullClone
+		tflog.Trace(ctx, fmt.Sprintf("Creating with VMID %d", id))
+		vmr = pveapi.NewVmRef(id)
+		vmr.SetNode(plan.Node.ValueString())
 
-		var srcvmr *pveapi.VmRef
-		if cloneID, err := strconv.ParseInt(plan.Clone.ValueString(), 10, 64); err == nil {
-			srcvmr = pveapi.NewVmRef(int(cloneID))
-			// I think its possible the clone template is not on the same node?
-			srcvmr.SetNode(plan.Node.ValueString())
+		if plan.Clone.IsNull() {
+			err = config.Create(vmr, r.client)
+			if err != nil {
+				re := regexp.MustCompile(`500 unable to create VM \d+ \- VM \d+ already exists`)
+				if plan.VMID.IsUnknown() && re.MatchString(err.Error()) {
+					// if we tried creating with an auto-assigned ID try again
+					continue
+				}
+
+				resp.Diagnostics.AddError(
+					"Error Creating VM",
+					"Could not create VM, unexpected error: "+err.Error(),
+				)
+				return
+			}
+
+			tflog.Trace(ctx, "Created VM")
 		} else {
-			srcvmr, err = r.client.GetVmRefByName(plan.Clone.ValueString())
+			fullClone := new(int)
+			*fullClone = 0
+			config.FullClone = fullClone
+
+			var srcvmr *pveapi.VmRef
+			if cloneID, err := strconv.ParseInt(plan.Clone.ValueString(), 10, 64); err == nil {
+				srcvmr = pveapi.NewVmRef(int(cloneID))
+				// I think its possible the clone template is not on the same node?
+				srcvmr.SetNode(plan.Node.ValueString())
+			} else {
+				srcvmr, err = r.client.GetVmRefByName(plan.Clone.ValueString())
+				if err != nil {
+					resp.Diagnostics.AddError(
+						"Error Creating VM",
+						fmt.Sprintf("Could not clone VM, no template with ID/name '%s' could be found", plan.Clone.ValueString()),
+					)
+					return
+				}
+			}
+
+			err = config.CloneVm(srcvmr, vmr, r.client)
 			if err != nil {
+				re := regexp.MustCompile(`unable to create VM \d+: config file already exists`)
+				if plan.VMID.IsUnknown() && re.MatchString(err.Error()) {
+					// if we tried cloning with an auto-assigned ID try again
+					continue
+				}
+
 				resp.Diagnostics.AddError(
 					"Error Creating VM",
-					fmt.Sprintf("Could not clone VM, no template with ID/name '%s' could be found", plan.Clone.ValueString()),
+					"Could not clone VM, unexpected error: "+err.Error(),
 				)
 				return
 			}
-		}
 
-		err = config.CloneVm(srcvmr, vmr, r.client)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error Creating VM",
-				"Could not clone VM, unexpected error: "+err.Error(),
-			)
-			return
-		}
-		tflog.Trace(ctx, "Created VM by cloning")
+			tflog.Trace(ctx, "Created VM by cloning")
 
-		// would be great if the API client read description from config and sent it along the clone request
-		// .. until then, set it manually
-		requiresReboot, err := config.Update(false, vmr, r.client)
-		if err != nil {
-			resp.Diagnostics.AddError(
-				"Error Creating VM",
-				"Could not update VM after cloning, unexpected error: "+err.Error(),
-			)
-			return
-		}
-
-		if requiresReboot {
-			_, err = r.client.StopVm(vmr)
+			// would be great if the API client read description from config and sent it along the clone request
+			// .. until then, set it manually
+			requiresReboot, err := config.Update(false, vmr, r.client)
 			if err != nil {
 				resp.Diagnostics.AddError(
 					"Error Creating VM",
-					"Could not stop VM while rebooting after clone, unexpected error: "+err.Error(),
+					"Could not update VM after cloning, unexpected error: "+err.Error(),
 				)
 				return
 			}
-			_, err = r.client.StartVm(vmr)
-			if err != nil {
-				resp.Diagnostics.AddError(
-					"Error Creating VM",
-					"Could not start VM while rebooting after clone, unexpected error: "+err.Error(),
-				)
-				return
+
+			if requiresReboot {
+				_, err = r.client.StopVm(vmr)
+				if err != nil {
+					resp.Diagnostics.AddError(
+						"Error Creating VM",
+						"Could not stop VM while rebooting after clone, unexpected error: "+err.Error(),
+					)
+					return
+				}
+				_, err = r.client.StartVm(vmr)
+				if err != nil {
+					resp.Diagnostics.AddError(
+						"Error Creating VM",
+						"Could not start VM while rebooting after clone, unexpected error: "+err.Error(),
+					)
+					return
+				}
 			}
 		}
+
+		// we made it, get out of the loop
+		break
 	}
 
 	if plan.Status.ValueString() == stateRunning {

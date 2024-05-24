@@ -152,6 +152,130 @@ resource "proxmox_vm" "test" {
 	})
 }
 
+func TestAccVMResource_CreateTwoVMsWithoutVMID_GetSequentialIds(t *testing.T) {
+	var vma, vmb vmResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test_a" {
+	node        = "pve"
+	name        = "wall-e"
+	description = "Waste Allocation Load Lifter: Earth-Class"
+
+	sockets = 2
+	cores   = 2
+	memory  = 32
+}
+
+resource "proxmox_vm" "test_b" {
+	node        = "pve"
+	name        = "eve"
+	description = "Extraterrestrial Vegetation Evaluator"
+
+	sockets = 2
+	cores   = 2
+	memory  = 32
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test_a", &vma),
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test_b", &vmb),
+				),
+			},
+		},
+	})
+}
+
+func TestAccVMResource_CreateTwoCloneVMsWithoutVMID_GetSequentialIds(t *testing.T) {
+	var vma, vmb vmResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	template, err := createTemplateInPve(ctx, "Test-Template-01", 200, "pve", 16, 5)
+	if err != nil {
+		t.Error("Error during setup: " + err.Error())
+		return
+	}
+	cleanUpFunc := destroyVMInPve(template)
+	defer cleanUpFunc()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test_a" {
+	node        = "pve"
+	name        = "wall-e"
+	description = "Waste Allocation Load Lifter: Earth-Class"
+
+	clone = 200
+
+	sockets = 2
+	cores   = 2
+	memory  = 32
+}
+
+resource "proxmox_vm" "test_b" {
+	node        = "pve"
+	name        = "eve"
+	description = "Extraterrestrial Vegetation Evaluator"
+
+	clone = 200
+
+	sockets = 2
+	cores   = 2
+	memory  = 32
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test_a", &vma),
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test_b", &vmb),
+				),
+			},
+		},
+	})
+}
+
+func TestAccVMResource_CreateTwoVMsWithSameVMID_CausesError(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test_a" {
+	node        = "pve"
+	name        = "wall-e"
+	description = "Waste Allocation Load Lifter: Earth-Class"
+	vmid        = 100
+
+	sockets = 2
+	cores   = 2
+	memory  = 32
+}
+
+resource "proxmox_vm" "test_b" {
+	node        = "pve"
+	name        = "eve"
+	description = "Extraterrestrial Vegetation Evaluator"
+	vmid        = 100
+
+	sockets = 2
+	cores   = 2
+	memory  = 32
+}
+`,
+				ExpectError: regexp.MustCompile(`VM 100 already exists`),
+			},
+		},
+	})
+}
+
 func TestAccVMResource_CreateWithAgent_IpCanBeRead(t *testing.T) {
 	var vm vmResourceModel
 
