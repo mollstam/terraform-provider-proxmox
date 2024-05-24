@@ -893,8 +893,10 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 							}
 						}
 					}
-					errchan <- errors.New("Got answer from guest agent but unable to read a IP address from it")
-					return
+
+					// if no valid IP read yet keep checking until deadline
+					time.Sleep(2 * time.Second)
+					continue
 				}
 			}()
 
