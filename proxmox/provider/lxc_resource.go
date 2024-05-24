@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -333,27 +334,38 @@ func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 	tflog.Trace(ctx, fmt.Sprintf("Creating LXC from model: %+v", plan))
 
-	id, err := getIDToUse(plan.VMID, r.client)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error Determining VM ID",
-			"Unexpected error when getting next free VM ID from the API. If you can't solve this error please report it to the provider developers.\n\n"+err.Error())
-		return
-	}
-	tflog.Trace(ctx, fmt.Sprintf("Creating with VMID %d", id))
-	vmr := pveapi.NewVmRef(id)
-	vmr.SetNode(plan.Node.ValueString())
-	vmr.SetVmType(vmTypeLxc)
+	var vmr *pveapi.VmRef
 
-	err = config.CreateLxc(vmr, r.client)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error Creating LXC",
-			"Could not create LXC, unexpected error: "+err.Error(),
-		)
-		return
+	for {
+		id, err := getIDToUse(plan.VMID, r.client)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Determining VM ID",
+				"Unexpected error when getting next free VM ID from the API. If you can't solve this error please report it to the provider developers.\n\n"+err.Error())
+			return
+		}
+		tflog.Trace(ctx, fmt.Sprintf("Creating with VMID %d", id))
+		vmr = pveapi.NewVmRef(id)
+		vmr.SetNode(plan.Node.ValueString())
+		vmr.SetVmType(vmTypeLxc)
+
+		err = config.CreateLxc(vmr, r.client)
+		if err != nil {
+			re := regexp.MustCompile(`unable to create CT \d+ \- CT \d+ already exists`)
+			if plan.VMID.IsUnknown() && re.MatchString(err.Error()) {
+				// if we tried creating with an auto-assigned ID try again
+				continue
+			}
+
+			resp.Diagnostics.AddError(
+				"Error Creating LXC",
+				"Could not create LXC, unexpected error: "+err.Error(),
+			)
+			return
+		}
+		tflog.Trace(ctx, "Created LXC")
+		break
 	}
-	tflog.Trace(ctx, "Created LXC")
 
 	if plan.Status.ValueString() == stateRunning {
 		tflog.Trace(ctx, "Starting LXC since status set to "+plan.Status.ValueString())

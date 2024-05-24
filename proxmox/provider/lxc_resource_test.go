@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -251,6 +252,67 @@ resource "proxmox_lxc" "test" {
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "unprivileged", "false"),
 				),
+			},
+		},
+	})
+}
+
+func TestAccLXCResource_CreateTwoLXCs_GetSequentialIds(t *testing.T) {
+	var lxca, lxcb lxcResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test_a" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+	hostname     = "wall-e"
+}
+
+resource "proxmox_lxc" "test_b" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+	hostname     = "eve"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test_a", &lxca),
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test_b", &lxcb),
+				),
+			},
+		},
+	})
+}
+
+func TestAccLXCResource_CreateTwoLXCsWithSameVMID_CausesError(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test_a" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	vmid         = 100
+
+	hostname     = "wall-e"
+}
+
+resource "proxmox_lxc" "test_b" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	vmid         = 100
+
+	hostname     = "eve"
+}
+`,
+				ExpectError: regexp.MustCompile(`CT 100 already exists`),
 			},
 		},
 	})
