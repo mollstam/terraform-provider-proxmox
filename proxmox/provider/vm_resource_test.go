@@ -516,6 +516,29 @@ resource "proxmox_vm" "test_clone" {
 					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "clone", "200"),
 				),
 			},
+			{
+				Config: providerConfig + `
+resource "proxmox_vm" "test_clone" {
+	node = "pve"
+	name = "m-o"
+	description = "Microbe-Obliterator"
+	
+	clone = "200"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckVMExistsInPve(ctx, "proxmox_vm.test_clone", &vm),
+					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("m-o"), types.StringValue("Microbe-Obliterator"), types.Int64Value(1), types.Int64Value(1), types.Int64Value(16)),
+					testCheckVMStatusInPve(&vm, "running"),
+					testCheckVMIsCloneOf(&vm, template),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "vmid", "100"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "name", "m-o"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "description", "Microbe-Obliterator"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "status", "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test_clone", "clone", "200"),
+				),
+			},
 		},
 	})
 }
