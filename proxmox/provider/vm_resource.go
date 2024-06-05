@@ -622,7 +622,7 @@ func (r *vmResource) Read(ctx context.Context, req resource.ReadRequest, resp *r
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Reading VM State",
-				fmt.Sprintf("Could not read state of VM %d, unsepcted error:"+err.Error(), state.VMID.ValueInt64()),
+				fmt.Sprintf("Could not read state of VM %d, unexpected error:"+err.Error(), state.VMID.ValueInt64()),
 			)
 			return
 		}
