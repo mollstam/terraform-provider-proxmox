@@ -709,6 +709,10 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 	}
 
 	var state vmResourceModel
+
+	// carry over .clone since it is merely a property in TF state not backed by anything on the PVE side
+	state.Clone = plan.Clone
+
 	err = UpdateVMResourceModelFromAPI(ctx, id, r.client, &state, VMStateEverything)
 	if err != nil {
 		resp.Diagnostics.AddError(
