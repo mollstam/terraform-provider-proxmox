@@ -400,7 +400,7 @@ func schemaVMNet() schema.Attribute {
 			},
 			"mac_address": schema.StringAttribute{
 				Description: "The hardware address.",
-				Required:    false,
+				Optional:    true,
 				Computed:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),

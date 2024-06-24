@@ -50,8 +50,8 @@ resource "proxmox_vm" "test" {
 	}
 	
 	net = {
-		name   = "eth0"
-		bridge = "vmbr0"
+		bridge      = "vmbr0"
+		mac_address = "bc:24:11:6f:9e:d3"
 	}
 }
 `,
@@ -59,6 +59,7 @@ resource "proxmox_vm" "test" {
 					testCheckVMExistsInPve(ctx, "proxmox_vm.test", &vm),
 					testCheckVMValuesInPve(&vm, types.StringValue("pve"), types.Int64Value(100), types.StringValue("wall-e"), types.StringValue("Waste Allocation Load Lifter: Earth-Class"), types.Int64Value(2), types.Int64Value(2), types.Int64Value(32)),
 					testCheckVMStorageValuesInPve(ctx, &vm, "virtio0", types.StringValue("local-lvm"), types.Int64Value(30)),
+					testCheckVMNetValuesInPve(ctx, &vm, types.StringValue("vmbr0"), types.StringValue("bc:24:11:6f:9e:d3")),
 					testCheckVMStatusInPve(&vm, "running"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "vmid", "100"),
@@ -72,6 +73,8 @@ resource "proxmox_vm" "test" {
 					resource.TestCheckResourceAttr("proxmox_vm.test", "virtio0.size", "30"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "virtio0.storage", "local-lvm"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "virtio0.format", "raw"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "net.bridge", "vmbr0"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "net.mac_address", "bc:24:11:6f:9e:d3"),
 					resource.TestCheckNoResourceAttr("proxmox_vm.test", "virtio2"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "32"),
 				),
@@ -1074,6 +1077,26 @@ func testCheckVMStorageValuesInPve(ctx context.Context, r *vmResourceModel, endp
 				gomega.Expect(dm.Storage).To(gomega.Equal(storage))
 				gomega.Expect(dm.Size).To(gomega.Equal(size))
 			}
+		})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+}
+
+func testCheckVMNetValuesInPve(ctx context.Context, r *vmResourceModel, bridge basetypes.StringValue, macAddress basetypes.StringValue) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		err := gomega.InterceptGomegaFailure(func() {
+			gomega.Expect(r.Net.IsNull()).To(gomega.BeFalseBecause("net should not be null"))
+			var dm vmNetModel
+			diags := r.Net.As(ctx, &dm, basetypes.ObjectAsOptions{})
+			if diags.HasError() {
+				panic("error when reading net from resource model")
+			}
+			gomega.Expect(dm.Bridge).To(gomega.Equal(bridge))
+			gomega.Expect(dm.MACAddress).To(gomega.Equal(macAddress))
 		})
 		if err != nil {
 			return err
