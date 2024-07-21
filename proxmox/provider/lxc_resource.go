@@ -310,7 +310,7 @@ func schemaRootFs() schema.Attribute {
 				Description: "Size in kilobyte (1024 bytes). Optional suffixes 'M' (megabyte, 1024K) and 'G' (gigabyte, 1024M)",
 				Required:    true,
 				Validators: []validator.String{
-					DiskSizeValidator("size must be numbers only, possibly ending in M or G"),
+					DiskSizeValidator("size must be numbers only, possibly ending in M or G", false),
 				},
 			},
 		},
@@ -344,7 +344,7 @@ func schemaMountpoint() schema.Attribute {
 				Description: "Size in kilobyte (1024 bytes). Optional suffixes 'M' (megabyte, 1024K) and 'G' (gigabyte, 1024M)",
 				Required:    true,
 				Validators: []validator.String{
-					DiskSizeValidator("size must be numbers only, possibly ending in M or G"),
+					DiskSizeValidator("size must be numbers only and a suffix of M or G", true),
 				},
 			},
 		},

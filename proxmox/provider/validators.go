@@ -58,7 +58,8 @@ func URLValidator(description string) validator.String {
 var _ validator.String = diskSizeValidator{}
 
 type diskSizeValidator struct {
-	description string
+	description   string
+	requireSuffix bool
 }
 
 func (v diskSizeValidator) Description(_ context.Context) string {
@@ -80,7 +81,12 @@ func (v diskSizeValidator) ValidateString(ctx context.Context, request validator
 	if val.Equal(types.StringValue("")) {
 		invalid = true
 	} else {
-		re := regexp.MustCompile(`^\d+[MG]?$`)
+		var re *regexp.Regexp
+		if v.requireSuffix {
+			re = regexp.MustCompile(`^\d+[MG]$`)
+		} else {
+			re = regexp.MustCompile(`^\d+[MG]?$`)
+		}
 		invalid = !re.MatchString(val.ValueString())
 	}
 
@@ -93,8 +99,8 @@ func (v diskSizeValidator) ValidateString(ctx context.Context, request validator
 	}
 }
 
-func DiskSizeValidator(description string) validator.String {
-	return diskSizeValidator{description}
+func DiskSizeValidator(description string, requireSuffix bool) validator.String {
+	return diskSizeValidator{description, requireSuffix}
 }
 
 var _ validator.String = ipValidator{}

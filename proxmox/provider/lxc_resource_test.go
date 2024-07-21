@@ -338,6 +338,32 @@ resource "proxmox_lxc" "test_b" {
 	})
 }
 
+func TestAccLXCResource_CreateMountpointWithInvalidSize_CausesError(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test_a" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	vmid         = 100
+
+	hostname     = "wall-e"
+
+	mp0 = {
+		storage = "local-lvm"
+		size    = "2"
+		mp      = "/mnt/foo"
+	}
+}
+`,
+				ExpectError: regexp.MustCompile(`size must be numbers only and a suffix of M or G`),
+			},
+		},
+	})
+}
+
 func TestAccLXCResource_CreateAndUpdateStopped(t *testing.T) {
 	var lxc lxcResourceModel
 
