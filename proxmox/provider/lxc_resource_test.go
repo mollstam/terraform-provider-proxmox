@@ -44,6 +44,12 @@ resource "proxmox_lxc" "test" {
 		size    = "1G"
 	}
 
+	mp0 = {
+		storage = "local-lvm"
+		size    = "2G"
+		mp      = "/mnt/foo"
+	}
+
 	net = {
 		name   = "eth0"
 		bridge = "vmbr0"
@@ -56,11 +62,15 @@ resource "proxmox_lxc" "test" {
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
 					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false)),
 					testCheckLXCRootfsValuesInPve(ctx, &lxc, types.StringValue("local-lvm"), types.StringValue("1G")),
+					testCheckLXCMountpointValuesInPve(ctx, &lxc, 0, types.StringValue("local-lvm"), types.StringValue("2G"), types.StringValue("/mnt/foo")),
 					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("192.168.0.50/24"), types.StringValue("192.168.0.1")),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.storage", "local-lvm"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.size", "1G"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "mp0.storage", "local-lvm"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "mp0.size", "2G"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "mp0.mp", "/mnt/foo"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.name", "eth0"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.bridge", "vmbr0"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.ip", "192.168.0.50/24"),
@@ -80,6 +90,12 @@ resource "proxmox_lxc" "test" {
 		size    = "2G"
 	}
 
+	mp0 = {
+		storage = "local-lvm"
+		size    = "3G"
+		mp      = "/mnt/bar"
+	}
+
 	net = {
 		name   = "eth0"
 		bridge = "vmbr0"
@@ -91,11 +107,15 @@ resource "proxmox_lxc" "test" {
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
 					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("m-o"), types.BoolValue(false)),
 					testCheckLXCRootfsValuesInPve(ctx, &lxc, types.StringValue("local-lvm"), types.StringValue("2G")),
+					testCheckLXCMountpointValuesInPve(ctx, &lxc, 0, types.StringValue("local-lvm"), types.StringValue("3G"), types.StringValue("/mnt/bar")),
 					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("dhcp"), types.StringNull()),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "m-o"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.storage", "local-lvm"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.size", "2G"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "mp0.storage", "local-lvm"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "mp0.size", "3G"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "mp0.mp", "/mnt/bar"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.name", "eth0"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.bridge", "vmbr0"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.ip", "dhcp"),
@@ -524,6 +544,32 @@ func testCheckLXCRootfsValuesInPve(ctx context.Context, r *lxcResourceModel, sto
 			}
 			gomega.Expect(dm.Storage).To(gomega.Equal(storage))
 			gomega.Expect(dm.Size).To(gomega.Equal(size))
+		})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+}
+
+func testCheckLXCMountpointValuesInPve(ctx context.Context, r *lxcResourceModel, index int, storage basetypes.StringValue, size basetypes.StringValue, mp basetypes.StringValue) resource.TestCheckFunc {
+	return func(_ *terraform.State) error {
+		err := gomega.InterceptGomegaFailure(func() {
+			o := basetypes.ObjectValue{}
+			if index == 0 {
+				o = r.Mp0
+			}
+			gomega.Expect(o.IsNull()).To(gomega.BeFalseBecause("mp%d should not be null", index))
+
+			var dm mountpointModel
+			diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
+			if diags.HasError() {
+				panic("error when reading mp from resource model")
+			}
+			gomega.Expect(dm.Storage).To(gomega.Equal(storage))
+			gomega.Expect(dm.Size).To(gomega.Equal(size))
+			gomega.Expect(dm.Mountpoint).To(gomega.Equal(mp))
 		})
 		if err != nil {
 			return err

@@ -56,6 +56,8 @@ type lxcResourceModel struct {
 
 	RootFs types.Object `tfsdk:"rootfs"`
 
+	Mp0 types.Object `tfsdk:"mp0"`
+
 	Net types.Object `tfsdk:"net"`
 }
 
@@ -93,6 +95,56 @@ func (m *rootfsModel) readFromAPIConfig(c *pveapi.QemuDevice) {
 }
 
 func (m rootfsModel) writeToAPIConfig(c *pveapi.QemuDevice) {
+	(*c)["size"] = m.Size.ValueString()
+	if !m.Volume.IsUnknown() {
+		(*c)["volume"] = m.Volume.ValueString()
+		parts := strings.Split(m.Volume.ValueString(), ":")
+		(*c)["storage"] = parts[0]
+	} else {
+		(*c)["storage"] = m.Storage.ValueString()
+	}
+}
+
+type mountpointModel struct {
+	Mountpoint types.String `tfsdk:"mp"`
+	Volume     types.String `tfsdk:"volume"`
+	Storage    types.String `tfsdk:"storage"`
+	Size       types.String `tfsdk:"size"`
+}
+
+func (mountpointModel) AttributeTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"mp":      types.StringType,
+		"volume":  types.StringType,
+		"storage": types.StringType,
+		"size":    types.StringType,
+	}
+}
+
+func (m *mountpointModel) readFromAPIConfig(c *pveapi.QemuDevice) {
+	if val, ok := (*c)["mp"]; ok {
+		m.Mountpoint = types.StringValue(val.(string))
+	}
+	if val, ok := (*c)["volume"]; ok && val != "" {
+		m.Volume = types.StringValue(val.(string))
+		parts := strings.Split(val.(string), ":")
+		m.Storage = types.StringValue(parts[0])
+		if len(parts) == 2 {
+			size, err := strconv.ParseInt(parts[1], 10, 64)
+			if err == nil { // if eg "local-lvm:3" read it as 3G size
+				m.Size = types.StringValue(fmt.Sprintf("%dG", size))
+			}
+		}
+	} else if val, ok := (*c)["storage"]; ok {
+		m.Storage = types.StringValue(val.(string))
+	}
+	if val, ok := (*c)["size"]; ok {
+		m.Size = types.StringValue(val.(string))
+	}
+}
+
+func (m mountpointModel) writeToAPIConfig(c *pveapi.QemuDevice) {
+	(*c)["mp"] = m.Mountpoint.ValueString()
 	(*c)["size"] = m.Size.ValueString()
 	if !m.Volume.IsUnknown() {
 		(*c)["volume"] = m.Volume.ValueString()
@@ -231,6 +283,7 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 				},
 			},
 			"rootfs": schemaRootFs(),
+			"mp0":    schemaMountpoint(),
 			"net":    schemaLxcNet(),
 		},
 	}
@@ -245,6 +298,9 @@ func schemaRootFs() schema.Attribute {
 			"volume": schema.StringAttribute{
 				Description: "Volume identifier.",
 				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"storage": schema.StringAttribute{
 				Description: "The storage identifier.",
@@ -260,6 +316,37 @@ func schemaRootFs() schema.Attribute {
 		},
 		PlanModifiers: []planmodifier.Object{
 			objectplanmodifier.UseStateForUnknown(),
+		},
+	}
+}
+
+func schemaMountpoint() schema.Attribute {
+	return schema.SingleNestedAttribute{
+		Description: "Use volume as container mount point.",
+		Optional:    true,
+		Attributes: map[string]schema.Attribute{
+			"volume": schema.StringAttribute{
+				Description: "Volume identifier.",
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"mp": schema.StringAttribute{
+				Description: "The mountpoint in the container.",
+				Required:    true,
+			},
+			"storage": schema.StringAttribute{
+				Description: "The storage identifier.",
+				Required:    true,
+			},
+			"size": schema.StringAttribute{
+				Description: "Size in kilobyte (1024 bytes). Optional suffixes 'M' (megabyte, 1024K) and 'G' (gigabyte, 1024M)",
+				Required:    true,
+				Validators: []validator.String{
+					DiskSizeValidator("size must be numbers only, possibly ending in M or G"),
+				},
+			},
 		},
 	}
 }
@@ -516,6 +603,42 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		config.RootFs = newRootfs
 	}
 
+	if state.Mp0.IsNull() != plan.Mp0.IsNull() || !state.Mp0.Equal(plan.Mp0) {
+		oldMountpoint, err := mountpointAPIConfigFromStateValue(ctx, state.Mp0, 0)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error constructing API struct from internal model",
+				"This is a provider bug. Please report it to the developers.\n\n"+err.Error())
+			return
+		}
+
+		newMountpoint, err := mountpointAPIConfigFromStateValue(ctx, plan.Mp0, 0)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error constructing API struct from internal model",
+				"This is a provider bug. Please report it to the developers.\n\n"+err.Error())
+			return
+		}
+
+		oldDisks := pveapi.QemuDevices{}
+		if oldMountpoint != nil {
+			oldDisks[0] = oldMountpoint
+		}
+		newDisks := pveapi.QemuDevices{}
+		if newMountpoint != nil {
+			newDisks[0] = newMountpoint
+		}
+		err = applyLxcDiskChanges(oldDisks, newDisks, vmr, r.client)
+		if err != nil {
+			resp.Diagnostics.AddError(
+				"Error Updating LXC",
+				"Could not update LXC disks, unexpected error: "+err.Error(),
+			)
+			return
+		}
+		config.Mountpoints = newDisks
+	}
+
 	err = config.UpdateConfig(vmr, r.client)
 	if err != nil {
 		resp.Diagnostics.AddError(
@@ -752,6 +875,21 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 			model.RootFs = m
 		}
 
+		if len(config.Mountpoints) == 0 {
+			dm := mountpointModel{}
+			dmAttrs := dm.AttributeTypes()
+			model.Mp0 = types.ObjectNull(dmAttrs)
+		} else {
+			dm := mountpointModel{}
+			mp0 := config.Mountpoints[0]
+			dm.readFromAPIConfig(&mp0)
+			m, diags := types.ObjectValueFrom(ctx, dm.AttributeTypes(), dm)
+			if diags.HasError() {
+				return errors.New("Unexpected error when reading mp0 from config")
+			}
+			model.Mp0 = m
+		}
+
 		if len(config.Networks) == 0 {
 			dm := lxcNetModel{}
 			dmAttrs := dm.AttributeTypes()
@@ -806,6 +944,14 @@ func apiConfigFromLXCResourceModel(ctx context.Context, model *lxcResourceModel,
 		}
 	}
 
+	if !model.Mp0.IsNull() && !model.Mp0.IsUnknown() {
+		mp0, err := mountpointAPIConfigFromStateValue(ctx, model.Mp0, 0)
+		if err != nil {
+			return err
+		}
+		config.Mountpoints = pveapi.QemuDevices{0: mp0}
+	}
+
 	if !model.Net.IsNull() && !model.Net.IsUnknown() {
 		net0, err := lxcNetAPIConfigFromStateValue(ctx, model.Net)
 		if err != nil {
@@ -825,10 +971,26 @@ func rootfsAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue)
 	var dm rootfsModel
 	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
 	if diags.HasError() {
-		return nil, errors.New("unable to create config object from virtio0 state value")
+		return nil, errors.New("unable to create config object from rootfs state value")
 	}
 	c := pveapi.QemuDevice{}
 	dm.writeToAPIConfig(&c)
+	return c, nil
+}
+
+func mountpointAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue, slot int) (pveapi.QemuDevice, error) {
+	if o.IsNull() {
+		return nil, nil
+	}
+
+	var dm mountpointModel
+	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return nil, errors.New("unable to create config object from mountpoint state value")
+	}
+	c := pveapi.QemuDevice{}
+	dm.writeToAPIConfig(&c)
+	c["slot"] = slot
 	return c, nil
 }
 
