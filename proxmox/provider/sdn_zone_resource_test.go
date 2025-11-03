@@ -13,7 +13,7 @@ import (
 	"github.com/onsi/gomega"
 )
 
-func TestAccSDNZoneResource_CreateAndUpdate(t *testing.T) {
+func TestAccSDNZoneResource_CreateAndUpdateVLAN(t *testing.T) {
 	var zone sdnZoneResourceModel
 
 	ctx := testutil.GetTestLoggingContext()
@@ -31,7 +31,7 @@ resource "proxmox_sdn_zone" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckSDNZoneExistsInPve(ctx, "proxmox_sdn_zone.test", &zone),
-					testCheckSDNZoneValuesInPve(&zone, types.StringValue("test"), types.StringValue("vlan"), types.StringValue("vmbr0")),
+					testCheckSDNZoneValuesInPve(&zone, types.StringValue("test"), types.StringValue("vlan"), types.StringValue("vmbr0"), types.StringNull(), types.Int64Null()),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "zone", "test"),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "type", "vlan"),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "bridge", "vmbr0"),
@@ -47,10 +47,58 @@ resource "proxmox_sdn_zone" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckSDNZoneExistsInPve(ctx, "proxmox_sdn_zone.test", &zone),
-					testCheckSDNZoneValuesInPve(&zone, types.StringValue("test"), types.StringValue("vlan"), types.StringValue("vmbr1")),
+					testCheckSDNZoneValuesInPve(&zone, types.StringValue("test"), types.StringValue("vlan"), types.StringValue("vmbr1"), types.StringNull(), types.Int64Null()),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "zone", "test"),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "type", "vlan"),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "bridge", "vmbr1"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccSDNZoneResource_CreateAndUpdateVXLAN(t *testing.T) {
+	var zone sdnZoneResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_sdn_zone" "test" {
+	zone   = "test"
+	type   = "vxlan"
+	peers  = "192.168.0.4,192.168.0.5"
+	mtu    = 1150 
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckSDNZoneExistsInPve(ctx, "proxmox_sdn_zone.test", &zone),
+					testCheckSDNZoneValuesInPve(&zone, types.StringValue("test"), types.StringValue("vxlan"), types.StringNull(), types.StringValue("192.168.0.4,192.168.0.5"), types.Int64Value(1150)),
+					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "zone", "test"),
+					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "type", "vxlan"),
+					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "peers", "192.168.0.4,192.168.0.5"),
+					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "mtu", "1150"),
+				),
+			},
+			{
+				Config: providerConfig + `
+resource "proxmox_sdn_zone" "test" {
+	zone   = "test"
+	type   = "vxlan"
+	peers  = "192.168.0.14,192.168.0.15"
+	mtu    = 1142
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckSDNZoneExistsInPve(ctx, "proxmox_sdn_zone.test", &zone),
+					testCheckSDNZoneValuesInPve(&zone, types.StringValue("test"), types.StringValue("vxlan"), types.StringNull(), types.StringValue("192.168.0.14,192.168.0.15"), types.Int64Value(1142)),
+					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "zone", "test"),
+					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "type", "vxlan"),
+					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "peers", "192.168.0.14,192.168.0.15"),
+					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "mtu", "1142"),
 				),
 			},
 		},
@@ -75,7 +123,7 @@ resource "proxmox_sdn_zone" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckSDNZoneExistsInPve(ctx, "proxmox_sdn_zone.test", &zone),
-					testCheckSDNZoneValuesInPve(&zone, types.StringValue("test"), types.StringValue("vlan"), types.StringValue("vmbr0")),
+					testCheckSDNZoneValuesInPve(&zone, types.StringValue("test"), types.StringValue("vlan"), types.StringValue("vmbr0"), types.StringNull(), types.Int64Null()),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "zone", "test"),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "type", "vlan"),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "bridge", "vmbr0"),
@@ -91,7 +139,7 @@ resource "proxmox_sdn_zone" "test" {
 `,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckSDNZoneExistsInPve(ctx, "proxmox_sdn_zone.test", &zone),
-					testCheckSDNZoneValuesInPve(&zone, types.StringValue("renamed"), types.StringValue("vlan"), types.StringValue("vmbr0")),
+					testCheckSDNZoneValuesInPve(&zone, types.StringValue("renamed"), types.StringValue("vlan"), types.StringValue("vmbr0"), types.StringNull(), types.Int64Null()),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "zone", "renamed"),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "type", "vlan"),
 					resource.TestCheckResourceAttr("proxmox_sdn_zone.test", "bridge", "vmbr0"),
@@ -119,12 +167,14 @@ func testCheckSDNZoneExistsInPve(ctx context.Context, n string, r *sdnZoneResour
 	}
 }
 
-func testCheckSDNZoneValuesInPve(r *sdnZoneResourceModel, zone basetypes.StringValue, typ basetypes.StringValue, bridge basetypes.StringValue) resource.TestCheckFunc {
+func testCheckSDNZoneValuesInPve(r *sdnZoneResourceModel, zone basetypes.StringValue, typ basetypes.StringValue, bridge basetypes.StringValue, peers basetypes.StringValue, mtu basetypes.Int64Value) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		err := gomega.InterceptGomegaFailure(func() {
 			gomega.Expect(r.Zone).To(gomega.Equal(zone))
 			gomega.Expect(r.Type).To(gomega.Equal(typ))
 			gomega.Expect(r.Bridge).To(gomega.Equal(bridge))
+			gomega.Expect(r.Peers).To(gomega.Equal(peers))
+			gomega.Expect(r.MTU).To(gomega.Equal(mtu))
 		})
 		if err != nil {
 			return err

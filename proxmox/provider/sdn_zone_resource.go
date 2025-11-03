@@ -39,9 +39,13 @@ type sdnZoneResource struct {
 }
 
 type sdnZoneResourceModel struct {
-	Zone   types.String `tfsdk:"zone"`
-	Type   types.String `tfsdk:"type"`
+	Zone types.String `tfsdk:"zone"`
+	Type types.String `tfsdk:"type"`
+
 	Bridge types.String `tfsdk:"bridge"`
+
+	Peers types.String `tfsdk:"peers"`
+	MTU   types.Int64  `tfsdk:"mtu"`
 }
 
 func (*sdnZoneResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -76,7 +80,16 @@ func (*sdnZoneResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			},
 			"bridge": schema.StringAttribute{
 				Description: "",
-				Required:    true,
+				Optional:    true,
+			},
+			"peers": schema.StringAttribute{
+				Description: "",
+				Optional:    true,
+			},
+			"mtu": schema.Int64Attribute{
+				Description: "",
+				Optional:    true,
+				Computed:    true,
 			},
 		},
 	}
@@ -273,7 +286,24 @@ func UpdateSDNZoneResourceModelFromAPI(ctx context.Context, zone string, client 
 
 	model.Zone = types.StringValue(config.Zone)
 	model.Type = types.StringValue(config.Type)
-	model.Bridge = types.StringValue(config.Bridge)
+
+	if len(config.Bridge) == 0 {
+		model.Bridge = types.StringNull()
+	} else {
+		model.Bridge = types.StringValue(config.Bridge)
+	}
+
+	if len(config.Peers) == 0 {
+		model.Peers = types.StringNull()
+	} else {
+		model.Peers = types.StringValue(config.Peers)
+	}
+
+	if config.MTU == 0 {
+		model.MTU = types.Int64Null()
+	} else {
+		model.MTU = types.Int64Value(int64(config.MTU))
+	}
 
 	tflog.Trace(ctx, fmt.Sprintf("Updated sdnZoneResourceModel from PVE API, model is now %+v", model), map[string]any{"vmid": zone})
 
@@ -282,7 +312,18 @@ func UpdateSDNZoneResourceModelFromAPI(ctx context.Context, zone string, client 
 
 func apiConfigFromSDNZoneResourceModel(ctx context.Context, model *sdnZoneResourceModel, config *pveapi.ConfigSDNZone, update bool) error {
 	config.Zone = model.Zone.ValueString()
-	config.Bridge = model.Bridge.ValueString()
+
+	if !model.Bridge.IsNull() {
+		config.Bridge = model.Bridge.ValueString()
+	}
+
+	if !model.Peers.IsNull() {
+		config.Peers = model.Peers.ValueString()
+	}
+
+	if !model.MTU.IsNull() {
+		config.MTU = int(model.MTU.ValueInt64())
+	}
 
 	if !update {
 		config.Type = model.Type.ValueString()
