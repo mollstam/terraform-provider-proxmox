@@ -49,16 +49,45 @@ type lxcResourceModel struct {
 	Ostemplate   types.String `tfsdk:"ostemplate"`
 	Unprivileged types.Bool   `tfsdk:"unprivileged"`
 	Ostype       types.String `tfsdk:"ostype"`
+	Cmode        types.String `tfsdk:"cmode"`
+
+	Features types.Object `tfsdk:"features"`
 
 	Hostname      types.String `tfsdk:"hostname"`
 	Password      types.String `tfsdk:"password"`
 	SSHPublicKeys types.String `tfsdk:"ssh_public_keys"`
+
+	Memory types.Int64 `tfsdk:"memory"`
 
 	RootFs types.Object `tfsdk:"rootfs"`
 
 	Mp0 types.Object `tfsdk:"mp0"`
 
 	Net types.Object `tfsdk:"net"`
+}
+
+type featuresModel struct {
+	Nesting types.Bool `tfsdk:"nesting"`
+}
+
+func (featuresModel) AttributeTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"nesting": types.BoolType,
+	}
+}
+
+func (m *featuresModel) readFromAPIConfig(c *pveapi.QemuDevice) {
+	if val, ok := (*c)["nesting"]; ok {
+		m.Nesting = types.BoolValue(val.(int) == 1)
+	}
+}
+
+func (m featuresModel) writeToAPIConfig(c *pveapi.QemuDevice) {
+	if m.Nesting.ValueBool() {
+		(*c)["nesting"] = 1
+	} else {
+		(*c)["nesting"] = 0
+	}
 }
 
 type rootfsModel struct {
@@ -257,6 +286,14 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"cmode": schema.StringAttribute{
+				Description: "Console mode. By default, the console command tries to open a connection to one of the available tty devices. By setting cmode to 'console' it tries to attach to /dev/console instead. If you set cmode to 'shell', it simply invokes a shell inside the container (no login).",
+				Computed:    true,
+				Optional:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
 			"hostname": schema.StringAttribute{
 				Description: "Set a host name for the container.",
 				Computed:    true,
@@ -282,9 +319,18 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"rootfs": schemaRootFs(),
-			"mp0":    schemaMountpoint(),
-			"net":    schemaLxcNet(),
+			"memory": schema.Int64Attribute{
+				Description: "Amount of RAM for the container in MB.",
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
+			},
+			"rootfs":   schemaRootFs(),
+			"mp0":      schemaMountpoint(),
+			"net":      schemaLxcNet(),
+			"features": schemaFeatures(),
 		},
 	}
 }
@@ -381,6 +427,27 @@ func schemaLxcNet() schema.Attribute {
 					IPValidator("gw must be an IPv4 address"),
 				},
 			},
+		},
+	}
+}
+
+func schemaFeatures() schema.Attribute {
+	return schema.SingleNestedAttribute{
+		Description: "Allow containers access to advanced features. Only nesting support for now.",
+		Computed:    true,
+		Optional:    true,
+		Attributes: map[string]schema.Attribute{
+			"nesting": schema.BoolAttribute{
+				Computed: true,
+				Optional: true,
+				Default:  booldefault.StaticBool(false),
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
+			},
+		},
+		PlanModifiers: []planmodifier.Object{
+			objectplanmodifier.UseStateForUnknown(),
 		},
 	}
 }
@@ -858,8 +925,25 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 		model.Node = types.StringValue(vmr.Node())
 		model.VMID = types.Int64Value(int64(vmr.VmId()))
 		model.Ostype = types.StringValue(config.OsType)
+		model.Cmode = types.StringValue(config.CMode)
 		model.Hostname = types.StringValue(config.Hostname)
 		model.Unprivileged = types.BoolValue(config.Unprivileged)
+
+		model.Memory = types.Int64Value(int64(config.Memory))
+
+		if len(config.Features) == 0 {
+			dm := featuresModel{}
+			dmAttrs := dm.AttributeTypes()
+			model.Features = types.ObjectNull(dmAttrs)
+		} else {
+			dm := featuresModel{}
+			dm.readFromAPIConfig(&config.Features)
+			m, diags := types.ObjectValueFrom(ctx, dm.AttributeTypes(), dm)
+			if diags.HasError() {
+				return errors.New("Unexpected error when reading features from config")
+			}
+			model.Features = m
+		}
 
 		if len(config.RootFs) == 0 {
 			dm := rootfsModel{}
@@ -932,6 +1016,14 @@ func apiConfigFromLXCResourceModel(ctx context.Context, model *lxcResourceModel,
 		config.SSHPublicKeys = model.SSHPublicKeys.ValueString()
 	}
 
+	if !model.Cmode.IsNull() && !model.Cmode.IsUnknown() {
+		config.CMode = model.Cmode.ValueString()
+	}
+
+	if !model.Memory.IsNull() && !model.Memory.IsUnknown() {
+		config.Memory = int(model.Memory.ValueInt64())
+	}
+
 	if !model.Unprivileged.IsNull() && !model.Unprivileged.IsUnknown() {
 		config.Unprivileged = model.Unprivileged.ValueBool()
 	}
@@ -958,6 +1050,13 @@ func apiConfigFromLXCResourceModel(ctx context.Context, model *lxcResourceModel,
 			return err
 		}
 		config.Networks = pveapi.QemuDevices{0: net0}
+	}
+
+	if !model.Features.IsNull() && !model.Features.IsUnknown() {
+		config.Features, err = featuresAPIConfigFromStateValue(ctx, model.Features)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -1003,6 +1102,21 @@ func lxcNetAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue)
 	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
 	if diags.HasError() {
 		return nil, errors.New("unable to create config object from net state value")
+	}
+	c := pveapi.QemuDevice{}
+	dm.writeToAPIConfig(&c)
+	return c, nil
+}
+
+func featuresAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue) (pveapi.QemuDevice, error) {
+	if o.IsNull() {
+		return nil, nil
+	}
+
+	var dm featuresModel
+	diags := o.As(ctx, &dm, basetypes.ObjectAsOptions{})
+	if diags.HasError() {
+		return nil, errors.New("unable to create config object from features state value")
 	}
 	c := pveapi.QemuDevice{}
 	dm.writeToAPIConfig(&c)
