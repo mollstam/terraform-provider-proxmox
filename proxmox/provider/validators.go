@@ -221,3 +221,48 @@ func (v ipCidrValidator) ValidateString(ctx context.Context, request validator.S
 func IPCidrValidator(description string) validator.String {
 	return ipCidrValidator{description}
 }
+
+var _ validator.String = sdnZoneValidator{}
+
+type sdnZoneValidator struct {
+	description string
+}
+
+func (v sdnZoneValidator) Description(_ context.Context) string {
+	return v.description
+}
+
+func (v sdnZoneValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v sdnZoneValidator) ValidateString(ctx context.Context, request validator.StringRequest, response *validator.StringResponse) {
+	if request.ConfigValue.IsNull() || request.ConfigValue.IsUnknown() {
+		return
+	}
+
+	val := request.ConfigValue
+
+	invalid := false
+	if val.Equal(types.StringValue("")) {
+		invalid = true
+	} else {
+		re := regexp.MustCompile(`^[a-zA-Z0-9]{2,8}$`)
+		m := re.FindStringSubmatch(val.ValueString())
+		if m == nil {
+			invalid = true
+		}
+	}
+
+	if invalid {
+		response.Diagnostics.Append(validatordiag.InvalidAttributeValueMatchDiagnostic(
+			request.Path,
+			v.Description(ctx),
+			val.String(),
+		))
+	}
+}
+
+func SDNZoneValidator(description string) validator.String {
+	return sdnZoneValidator{description}
+}

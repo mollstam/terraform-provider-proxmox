@@ -349,6 +349,7 @@ func (*proxmoxProvider) Resources(_ context.Context) []func() resource.Resource 
 	return []func() resource.Resource{
 		NewVMResource,
 		NewLXCResource,
+		NewSDNZoneResource,
 	}
 }
 
