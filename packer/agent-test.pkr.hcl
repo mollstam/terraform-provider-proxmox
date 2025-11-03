@@ -1,6 +1,6 @@
 
 source "proxmox-iso" "agent-test" {
-  proxmox_url              = "https://127.0.0.1:8806/api2/json"
+  proxmox_url              = "https://172.26.56.125:8006/api2/json"
   username                 = "root@pam"
   password                 = "123123"
   insecure_skip_tls_verify = true

@@ -13,14 +13,14 @@ import (
 var TestClient *pveapi.Client
 
 const (
-	apiURL      string = "https://127.0.0.1:8806/api2/json"
+	apiURL      string = "https://172.26.56.125:8006/api2/json"
 	apiUsername string = "root@pam"
 	apiPassword string = "123123"
 	tlsInsecure bool   = true
 	httpHeaders string = ""
 	timeout     int    = 10
-	proxy       string = ""
-	debug       bool   = false
+	proxy       string = "https://127.0.0.1:8006" // mitmproxy
+	debug       bool   = true
 )
 
 func init() {
