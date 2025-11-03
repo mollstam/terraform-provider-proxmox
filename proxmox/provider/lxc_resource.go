@@ -53,6 +53,7 @@ type lxcResourceModel struct {
 
 	Features types.Object `tfsdk:"features"`
 
+	OnBoot        types.Bool   `tfsdk:"onboot"`
 	Hostname      types.String `tfsdk:"hostname"`
 	Password      types.String `tfsdk:"password"`
 	SSHPublicKeys types.String `tfsdk:"ssh_public_keys"`
@@ -292,6 +293,15 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 				Optional:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"onboot": schema.BoolAttribute{
+				Description: "Specifies whether a container will be started during system bootup.",
+				Computed:    true,
+				Optional:    true,
+				Default:     booldefault.StaticBool(false),
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"hostname": schema.StringAttribute{
@@ -926,6 +936,7 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 		model.VMID = types.Int64Value(int64(vmr.VmId()))
 		model.Ostype = types.StringValue(config.OsType)
 		model.Cmode = types.StringValue(config.CMode)
+		model.OnBoot = types.BoolValue(config.OnBoot)
 		model.Hostname = types.StringValue(config.Hostname)
 		model.Unprivileged = types.BoolValue(config.Unprivileged)
 
@@ -1003,6 +1014,10 @@ func apiConfigFromLXCResourceModel(ctx context.Context, model *lxcResourceModel,
 	// Node set via VmRef
 	// VMID set via VmRef
 	config.Ostemplate = model.Ostemplate.ValueString()
+
+	if !model.OnBoot.IsNull() && !model.OnBoot.IsUnknown() {
+		config.OnBoot = model.OnBoot.ValueBool()
+	}
 
 	if !model.Hostname.IsNull() && !model.Hostname.IsUnknown() {
 		config.Hostname = model.Hostname.ValueString()

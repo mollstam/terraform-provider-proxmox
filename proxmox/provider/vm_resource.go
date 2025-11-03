@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/objectplanmodifier"
@@ -69,6 +70,7 @@ type vmResourceModel struct {
 
 	Status types.String `tfsdk:"status"`
 	Agent  types.Bool   `tfsdk:"agent"`
+	OnBoot types.Bool   `tfsdk:"onboot"`
 
 	Clone types.String `tfsdk:"clone"`
 
@@ -260,6 +262,15 @@ func (*vmResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *res
 				Optional:    true,
 				Computed:    true,
 				Default:     booldefault.StaticBool(false),
+			},
+			"onboot": schema.BoolAttribute{
+				Description: "Specifies whether a VM will be started during system bootup.",
+				Computed:    true,
+				Optional:    true,
+				Default:     booldefault.StaticBool(false),
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"sockets": schema.Int64Attribute{
 				Description: "The number of CPU sockets.",
@@ -939,6 +950,7 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 		}
 
 		model.Agent = types.BoolValue(config.Agent > 0)
+		model.OnBoot = types.BoolValue(*config.Onboot)
 		model.Sockets = types.Int64Value(int64(config.QemuSockets))
 		model.Cores = types.Int64Value(int64(config.QemuCores))
 		model.Memory = types.Int64Value(int64(config.Memory))
@@ -1144,6 +1156,9 @@ func apiConfigFromVMResourceModel(ctx context.Context, model *vmResourceModel, c
 	if model.Agent.ValueBool() {
 		config.Agent = 1
 	}
+
+	onboot := model.OnBoot.ValueBool()
+	config.Onboot = &onboot
 
 	config.QemuSockets = int(model.Sockets.ValueInt64())
 	config.QemuCores = int(model.Cores.ValueInt64())

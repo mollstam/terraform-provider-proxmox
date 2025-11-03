@@ -32,6 +32,7 @@ resource "proxmox_vm" "test" {
 	node        = "pve"
 	name        = "wall-e"
 	description = "Waste Allocation Load Lifter: Earth-Class"
+	onboot      = true
 
 	sockets = 2
 	cores   = 2
@@ -66,6 +67,7 @@ resource "proxmox_vm" "test" {
 					resource.TestCheckResourceAttr("proxmox_vm.test", "name", "wall-e"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "description", "Waste Allocation Load Lifter: Earth-Class"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "status", "running"),
+					resource.TestCheckResourceAttr("proxmox_vm.test", "onboot", "true"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "sockets", "2"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "cores", "2"),
 					resource.TestCheckResourceAttr("proxmox_vm.test", "memory", "32"),
