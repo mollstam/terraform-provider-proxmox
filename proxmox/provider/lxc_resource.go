@@ -186,18 +186,22 @@ func (m mountpointModel) writeToAPIConfig(c *pveapi.QemuDevice) {
 }
 
 type lxcNetModel struct {
-	Name    types.String `tfsdk:"name"`
-	Bridge  types.String `tfsdk:"bridge"`
-	IP      types.String `tfsdk:"ip"`
-	Gateway types.String `tfsdk:"gw"`
+	Name       types.String `tfsdk:"name"`
+	Bridge     types.String `tfsdk:"bridge"`
+	IP         types.String `tfsdk:"ip"`
+	Gateway    types.String `tfsdk:"gw"`
+	VLANID     types.Int64  `tfsdk:"vlan_id"`
+	VLANTrunks types.List   `tfsdk:"vlan_trunks"`
 }
 
 func (lxcNetModel) AttributeTypes() map[string]attr.Type {
 	return map[string]attr.Type{
-		"name":   types.StringType,
-		"bridge": types.StringType,
-		"ip":     types.StringType,
-		"gw":     types.StringType,
+		"name":        types.StringType,
+		"bridge":      types.StringType,
+		"ip":          types.StringType,
+		"gw":          types.StringType,
+		"vlan_id":     types.Int64Type,
+		"vlan_trunks": types.ListType{ElemType: vlanTrunksElementType},
 	}
 }
 
@@ -214,6 +218,7 @@ func (m *lxcNetModel) readFromAPIConfig(c *pveapi.QemuDevice) {
 	if val, ok := (*c)["gw"]; ok && val != "" {
 		m.Gateway = types.StringValue(val.(string))
 	}
+	m.VLANID, m.VLANTrunks = readVLANFromAPIConfig(c)
 }
 
 func (m lxcNetModel) writeToAPIConfig(c *pveapi.QemuDevice) {
@@ -223,6 +228,7 @@ func (m lxcNetModel) writeToAPIConfig(c *pveapi.QemuDevice) {
 	if !m.Gateway.IsUnknown() {
 		(*c)["gw"] = m.Gateway.ValueString()
 	}
+	writeVLANToAPIConfig(c, m.VLANID, m.VLANTrunks)
 }
 
 type LXCStateMask uint8
@@ -437,6 +443,8 @@ func schemaLxcNet() schema.Attribute {
 					IPValidator("gw must be an IPv4 address"),
 				},
 			},
+			"vlan_id":     schemaVLANID(),
+			"vlan_trunks": schemaVLANTrunks(),
 		},
 	}
 }
@@ -444,13 +452,10 @@ func schemaLxcNet() schema.Attribute {
 func schemaFeatures() schema.Attribute {
 	return schema.SingleNestedAttribute{
 		Description: "Allow containers access to advanced features. Only nesting support for now.",
-		Computed:    true,
 		Optional:    true,
 		Attributes: map[string]schema.Attribute{
 			"nesting": schema.BoolAttribute{
-				Computed: true,
 				Optional: true,
-				Default:  booldefault.StaticBool(false),
 				PlanModifiers: []planmodifier.Bool{
 					boolplanmodifier.UseStateForUnknown(),
 				},
@@ -515,7 +520,7 @@ func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, re
 
 		err = config.CreateLxc(vmr, r.client)
 		if err != nil {
-			re := regexp.MustCompile(`unable to create CT \d+ \- CT \d+ already exists`)
+			re := regexp.MustCompile(`CT \d+ already exists`)
 			if plan.VMID.IsUnknown() && re.MatchString(err.Error()) {
 				// if we tried creating with an auto-assigned ID try again
 				continue

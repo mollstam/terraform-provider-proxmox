@@ -176,6 +176,8 @@ type vmNetModel struct {
 	Model      types.String `tfsdk:"model"`
 	Bridge     types.String `tfsdk:"bridge"`
 	MACAddress types.String `tfsdk:"mac_address"`
+	VLANID     types.Int64  `tfsdk:"vlan_id"`
+	VLANTrunks types.List   `tfsdk:"vlan_trunks"`
 }
 
 func (vmNetModel) AttributeTypes() map[string]attr.Type {
@@ -183,6 +185,8 @@ func (vmNetModel) AttributeTypes() map[string]attr.Type {
 		"model":       types.StringType,
 		"bridge":      types.StringType,
 		"mac_address": types.StringType,
+		"vlan_id":     types.Int64Type,
+		"vlan_trunks": types.ListType{ElemType: vlanTrunksElementType},
 	}
 }
 
@@ -196,6 +200,7 @@ func (m *vmNetModel) readFromAPIConfig(c *pveapi.QemuDevice) {
 	if val, ok := (*c)["macaddr"]; ok {
 		m.MACAddress = types.StringValue(val.(string))
 	}
+	m.VLANID, m.VLANTrunks = readVLANFromAPIConfig(c)
 }
 
 func (m vmNetModel) writeToAPIConfig(c *pveapi.QemuDevice) {
@@ -206,6 +211,7 @@ func (m vmNetModel) writeToAPIConfig(c *pveapi.QemuDevice) {
 	if !m.MACAddress.IsUnknown() {
 		(*c)["macaddr"] = m.MACAddress.ValueString()
 	}
+	writeVLANToAPIConfig(c, m.VLANID, m.VLANTrunks)
 }
 
 type VMStateMask uint8
@@ -417,6 +423,8 @@ func schemaVMNet() schema.Attribute {
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
+			"vlan_id":     schemaVLANID(),
+			"vlan_trunks": schemaVLANTrunks(),
 		},
 		PlanModifiers: []planmodifier.Object{
 			objectplanmodifier.UseStateForUnknown(),
@@ -746,7 +754,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 				return
 			}
 		case stateStopped:
-			tflog.Trace(ctx, "Starting VM since status in plan set to "+plan.Status.ValueString())
+			tflog.Trace(ctx, "Stopping VM since status in plan set to "+plan.Status.ValueString())
 			_, err := r.client.StopVm(vmr)
 			if err != nil {
 				resp.Diagnostics.AddError(
@@ -854,8 +862,9 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 		tflog.Trace(ctx, fmt.Sprintf(".. updated config: %+v", config))
 	}
 
+	// the net block below needs the status too, to know whether an agent could answer at all
 	var status string
-	if sm&VMStateStatus != 0 {
+	if sm&(VMStateStatus|VMStateNet) != 0 {
 		state, err := client.GetVmState(vmr)
 		if err != nil {
 			return err
@@ -876,11 +885,17 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 		if val, ok := net0["macaddr"]; ok {
 			mac = strings.ToLower(macRe.FindString(val.(string)))
 		}
-		if mac != "" && config.Agent == 1 {
-			dl := time.After(time.Minute * 5)
-			ipv4chan := make(chan string)
-			errchan := make(chan error)
-			stopchan := make(chan bool)
+		// only a running VM can have an agent answering. polling a stopped one would burn the
+		// whole deadline and then fail the read, when what we want is for the status we just
+		// read to land in state as drift for terraform to reconcile.
+		if mac != "" && config.Agent == 1 && status == stateRunning {
+			agentTimeout := time.Duration(GetenvOrDefaultInt64("PVE_AGENT_TIMEOUT", defaultAgentTimeout)) * time.Second
+			dl := time.After(agentTimeout)
+			// all three are buffered so the poll goroutine can always finish its send and exit,
+			// even once we have stopped listening because the deadline fired
+			ipv4chan := make(chan string, 1)
+			errchan := make(chan error, 1)
+			stopchan := make(chan bool, 1)
 			defer func() {
 				select {
 				case stopchan <- true:
@@ -900,6 +915,12 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 						if strings.Contains(err.Error(), "500 QEMU guest agent is not running") {
 							time.Sleep(2 * time.Second)
 							continue
+						} else if strings.Contains(err.Error(), fmt.Sprintf("500 VM %d is not running", vmid)) {
+							// the status check above already skips stopped VMs, so reaching here means
+							// it was stopped out of band since. report no ip rather than failing the
+							// read, the stopped status is what should show up as drift
+							ipv4chan <- ""
+							return
 						}
 						errchan <- err
 						return
@@ -925,7 +946,10 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 
 			select {
 			case <-dl:
-				return errors.New("timeout waiting for agent to start")
+				// the agent may not be installed in the guest at all, or the guest may have no
+				// address to report for want of DHCP. ipv4_address is best effort, so leave it
+				// unset rather than failing a read that is otherwise fine
+				tflog.Warn(ctx, fmt.Sprintf("Giving up after %s waiting for the guest agent to report an IPv4 address, leaving ipv4_address unset", agentTimeout), map[string]any{"vmid": vmid})
 			case err = <-errchan:
 				return err
 			case ipv4 = <-ipv4chan:

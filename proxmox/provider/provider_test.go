@@ -13,7 +13,7 @@ provider "proxmox" {
 
 	api_token_id = "root@pam!tf"
 	api_token_secret = "4bac8712-4936-4739-a529-be2d5f1ac2de"
-	
+
 	proxy_server = "https://127.0.0.1:8006"
 
 	debug = true

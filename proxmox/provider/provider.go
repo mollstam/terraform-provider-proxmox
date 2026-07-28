@@ -26,6 +26,10 @@ import (
 
 const defaultTLSInsecure = false
 const defaultTimeout = 60
+
+// how long to wait for a running VM's guest agent to report an IPv4 address before
+// giving up and leaving ipv4_address unset. override with PVE_AGENT_TIMEOUT seconds.
+const defaultAgentTimeout = 300
 const defaultDebug = false
 
 func New(version string) func() provider.Provider {
@@ -349,7 +353,6 @@ func (*proxmoxProvider) Resources(_ context.Context) []func() resource.Resource 
 	return []func() resource.Resource{
 		NewVMResource,
 		NewLXCResource,
-		NewSDNZoneResource,
 	}
 }
 

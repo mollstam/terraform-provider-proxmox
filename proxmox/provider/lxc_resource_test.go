@@ -72,7 +72,7 @@ resource "proxmox_lxc" "test" {
 					testCheckLXCFeaturesValuesInPve(ctx, &lxc, types.BoolValue(true)),
 					testCheckLXCRootfsValuesInPve(ctx, &lxc, types.StringValue("local-lvm"), types.StringValue("1G")),
 					testCheckLXCMountpointValuesInPve(ctx, &lxc, 0, types.StringValue("local-lvm"), types.StringValue("2G"), types.StringValue("/mnt/foo")),
-					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("192.168.0.50/24"), types.StringValue("192.168.0.1")),
+					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("192.168.0.50/24"), types.StringValue("192.168.0.1"), types.Int64Null(), testVLANTrunks()),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.storage", "local-lvm"),
@@ -117,7 +117,7 @@ resource "proxmox_lxc" "test" {
 					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("m-o"), types.BoolValue(false), types.StringValue(""), types.Int64Value(512)),
 					testCheckLXCRootfsValuesInPve(ctx, &lxc, types.StringValue("local-lvm"), types.StringValue("2G")),
 					testCheckLXCMountpointValuesInPve(ctx, &lxc, 0, types.StringValue("local-lvm"), types.StringValue("3G"), types.StringValue("/mnt/bar")),
-					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("dhcp"), types.StringNull()),
+					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("dhcp"), types.StringNull(), types.Int64Null(), testVLANTrunks()),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "m-o"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "rootfs.storage", "local-lvm"),
@@ -129,6 +129,135 @@ resource "proxmox_lxc" "test" {
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.bridge", "vmbr0"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.ip", "dhcp"),
 				),
+			},
+		},
+	})
+}
+
+func TestAccLXCResource_CreateAndUpdateVLAN(t *testing.T) {
+	var lxc lxcResourceModel
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node       = "pve"
+	ostemplate = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	status     = "stopped"
+
+	rootfs = {
+		storage = "local-lvm"
+		size    = "1G"
+	}
+
+	net = {
+		name        = "eth0"
+		bridge      = "vmbr0"
+		ip          = "dhcp"
+		vlan_id     = 100
+		vlan_trunks = [20, 30, 40]
+	}
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("dhcp"), types.StringNull(), types.Int64Value(100), testVLANTrunks(20, 30, 40)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.vlan_id", "100"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.vlan_trunks.#", "3"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.vlan_trunks.0", "20"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.vlan_trunks.1", "30"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.vlan_trunks.2", "40"),
+				),
+			},
+			{
+				// change the tag and shrink the trunk list to a single VLAN, which PVE reads back as an int
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node       = "pve"
+	ostemplate = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	status     = "stopped"
+
+	rootfs = {
+		storage = "local-lvm"
+		size    = "1G"
+	}
+
+	net = {
+		name        = "eth0"
+		bridge      = "vmbr0"
+		ip          = "dhcp"
+		vlan_id     = 200
+		vlan_trunks = [20]
+	}
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("dhcp"), types.StringNull(), types.Int64Value(200), testVLANTrunks(20)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.vlan_id", "200"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.vlan_trunks.#", "1"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "net.vlan_trunks.0", "20"),
+				),
+			},
+			{
+				// dropping both attributes should clear the VLAN config on the PVE side
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node       = "pve"
+	ostemplate = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+	status     = "stopped"
+
+	rootfs = {
+		storage = "local-lvm"
+		size    = "1G"
+	}
+
+	net = {
+		name   = "eth0"
+		bridge = "vmbr0"
+		ip     = "dhcp"
+	}
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCNetValuesInPve(ctx, &lxc, types.StringValue("eth0"), types.StringValue("vmbr0"), types.StringValue("dhcp"), types.StringNull(), types.Int64Null(), testVLANTrunks()),
+					resource.TestCheckNoResourceAttr("proxmox_lxc.test", "net.vlan_id"),
+					resource.TestCheckNoResourceAttr("proxmox_lxc.test", "net.vlan_trunks.#"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccLXCResource_CreateWithDuplicateVLANTrunks_Errors(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node       = "pve"
+	ostemplate = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+	rootfs = {
+		storage = "local-lvm"
+		size    = "1G"
+	}
+
+	net = {
+		name        = "eth0"
+		bridge      = "vmbr0"
+		ip          = "dhcp"
+		vlan_trunks = [20, 20]
+	}
+}
+`,
+				ExpectError: regexp.MustCompile(`Duplicate List Value`),
 			},
 		},
 	})
@@ -216,13 +345,13 @@ resource "proxmox_lxc" "test" {
 			},
 			{
 				Config: providerConfig + `
-			resource "proxmox_lxc" "test" {
-				node         = "pve"
-				ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+resource "proxmox_lxc" "test" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
 
-				hostname = "wall-e"
-				ssh_public_keys = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCsPEwRz7XqtM0cIr9YtokMt6q7pt8Mz4h+nh+KC0WD163Puc5JZ0S9ZGcPX7fHObmXRquBZ1Ek4cBmi4SnY1V4/9bNWvDttFUVVhAwuLWJzf+pGyRnUZxl8VIwdLzGZvX6h0NWfwEIwjDyRZZW1VE/dlwyVTxUYwv2IhF8pdycNQ== walle@test"
-			}
+	hostname = "wall-e"
+	ssh_public_keys = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCsPEwRz7XqtM0cIr9YtokMt6q7pt8Mz4h+nh+KC0WD163Puc5JZ0S9ZGcPX7fHObmXRquBZ1Ek4cBmi4SnY1V4/9bNWvDttFUVVhAwuLWJzf+pGyRnUZxl8VIwdLzGZvX6h0NWfwEIwjDyRZZW1VE/dlwyVTxUYwv2IhF8pdycNQ== walle@test"
+}
 			`,
 				Check: resource.ComposeTestCheckFunc(
 					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
@@ -230,6 +359,60 @@ resource "proxmox_lxc" "test" {
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
 					resource.TestCheckResourceAttr("proxmox_lxc.test", "ssh_public_keys", "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQCsPEwRz7XqtM0cIr9YtokMt6q7pt8Mz4h+nh+KC0WD163Puc5JZ0S9ZGcPX7fHObmXRquBZ1Ek4cBmi4SnY1V4/9bNWvDttFUVVhAwuLWJzf+pGyRnUZxl8VIwdLzGZvX6h0NWfwEIwjDyRZZW1VE/dlwyVTxUYwv2IhF8pdycNQ== walle@test"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccLXCResource_CreateWithSSHKeysUpdateOtherField_DoesNotAttemptToUpdateSSHKeys(t *testing.T) {
+	var lxc lxcResourceModel
+
+	// changing ssh keys will recreate resource, hence its own test
+
+	ctx := testutil.GetTestLoggingContext()
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+	memory = 128
+
+	hostname = "wall-e"
+	ssh_public_keys = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDfnHfHWUoXXyGPgjFLwH8SE3MozO90AAQI9A338Bm0Srn6SJkdlOyaQdLXbvkTv1UTLhiDUR2KIsyNALYzpq5wNWirbMa8+8eBElrQwNwDP1WNdRW63lL4C01mdqMavqLiYoycOJjpOe7EmDgnNixIPesjBwPx5tHELJdHiLrU6Q== walle@test"
+}
+`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false), types.StringValue(""), types.Int64Value(128)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "ssh_public_keys", "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDfnHfHWUoXXyGPgjFLwH8SE3MozO90AAQI9A338Bm0Srn6SJkdlOyaQdLXbvkTv1UTLhiDUR2KIsyNALYzpq5wNWirbMa8+8eBElrQwNwDP1WNdRW63lL4C01mdqMavqLiYoycOJjpOe7EmDgnNixIPesjBwPx5tHELJdHiLrU6Q== walle@test"),
+				),
+			},
+			{
+				Config: providerConfig + `
+resource "proxmox_lxc" "test" {
+	node         = "pve"
+	ostemplate   = "local:vztmpl/alpine-3.18-default_20230607_amd64.tar.xz"
+
+	memory = 160
+
+	hostname = "wall-e"
+	ssh_public_keys = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDfnHfHWUoXXyGPgjFLwH8SE3MozO90AAQI9A338Bm0Srn6SJkdlOyaQdLXbvkTv1UTLhiDUR2KIsyNALYzpq5wNWirbMa8+8eBElrQwNwDP1WNdRW63lL4C01mdqMavqLiYoycOJjpOe7EmDgnNixIPesjBwPx5tHELJdHiLrU6Q== walle@test"
+}
+			`,
+				Check: resource.ComposeTestCheckFunc(
+					testCheckLXCExistsInPve(ctx, "proxmox_lxc.test", &lxc),
+					testCheckLXCValuesInPve(&lxc, types.StringValue("pve"), types.Int64Value(100), types.StringValue("alpine"), types.StringValue("wall-e"), types.BoolValue(false), types.StringValue(""), types.Int64Value(160)),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "node", "pve"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "hostname", "wall-e"),
+					resource.TestCheckResourceAttr("proxmox_lxc.test", "ssh_public_keys", "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDfnHfHWUoXXyGPgjFLwH8SE3MozO90AAQI9A338Bm0Srn6SJkdlOyaQdLXbvkTv1UTLhiDUR2KIsyNALYzpq5wNWirbMa8+8eBElrQwNwDP1WNdRW63lL4C01mdqMavqLiYoycOJjpOe7EmDgnNixIPesjBwPx5tHELJdHiLrU6Q== walle@test"),
 				),
 			},
 		},
@@ -341,7 +524,7 @@ resource "proxmox_lxc" "test_b" {
 	hostname     = "eve"
 }
 `,
-				ExpectError: regexp.MustCompile(`CT 100 already exists`),
+				ExpectError: regexp.MustCompile(`CT\s+100\s+already\s+exists`),
 			},
 		},
 	})
@@ -484,7 +667,7 @@ resource "proxmox_lxc" "test" {
 				Config: providerConfig + `
 resource "proxmox_lxc" "test" {
 	node        = "pve"
-	ostemplate  = "local:vztmpl/archlinux-base_20230608-1_amd64.tar.zst"
+	ostemplate  = "local:vztmpl/archlinux-base_20240911-1_amd64.tar.zst"
 }
 `,
 				Check: resource.ComposeTestCheckFunc(
@@ -636,7 +819,7 @@ func testCheckLXCMountpointValuesInPve(ctx context.Context, r *lxcResourceModel,
 	}
 }
 
-func testCheckLXCNetValuesInPve(ctx context.Context, r *lxcResourceModel, name basetypes.StringValue, bridge basetypes.StringValue, ip basetypes.StringValue, gw basetypes.StringValue) resource.TestCheckFunc {
+func testCheckLXCNetValuesInPve(ctx context.Context, r *lxcResourceModel, name basetypes.StringValue, bridge basetypes.StringValue, ip basetypes.StringValue, gw basetypes.StringValue, vlanID basetypes.Int64Value, vlanTrunks basetypes.ListValue) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		err := gomega.InterceptGomegaFailure(func() {
 			gomega.Expect(r.Net.IsNull()).To(gomega.BeFalseBecause("net should not be null"))
@@ -650,6 +833,8 @@ func testCheckLXCNetValuesInPve(ctx context.Context, r *lxcResourceModel, name b
 			gomega.Expect(dm.Bridge).To(gomega.Equal(bridge))
 			gomega.Expect(dm.IP).To(gomega.Equal(ip))
 			gomega.Expect(dm.Gateway).To(gomega.Equal(gw))
+			gomega.Expect(dm.VLANID).To(gomega.Equal(vlanID))
+			gomega.Expect(dm.VLANTrunks).To(gomega.Equal(vlanTrunks))
 		})
 		if err != nil {
 			return err
