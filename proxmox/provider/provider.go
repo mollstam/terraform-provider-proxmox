@@ -44,6 +44,12 @@ type proxmoxProvider struct {
 	version string
 }
 
+// providerData is shared by all resources configured from the same provider block.
+type providerData struct {
+	client *pveapi.Client
+	vmids  *vmidAllocator
+}
+
 type proxmoxProviderModel struct {
 	APIURL         types.String `tfsdk:"api_url"`
 	APITokenID     types.String `tfsdk:"api_token_id"`
@@ -343,8 +349,12 @@ func (*proxmoxProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
-	resp.DataSourceData = client
-	resp.ResourceData = client
+	data := &providerData{
+		client: client,
+		vmids:  newVMIDAllocator(client),
+	}
+	resp.DataSourceData = data
+	resp.ResourceData = data
 
 	tflog.Debug(ctx, "Configured Proxmox VE provider", map[string]any{"success": true})
 }

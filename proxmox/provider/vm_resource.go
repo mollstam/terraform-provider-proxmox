@@ -60,6 +60,7 @@ func NewVMResource() resource.Resource {
 
 type vmResource struct {
 	client *pveapi.Client
+	vmids  *vmidAllocator
 }
 
 type vmResourceModel struct {
@@ -437,17 +438,18 @@ func (r *vmResource) Configure(_ context.Context, req resource.ConfigureRequest,
 		return
 	}
 
-	client, ok := req.ProviderData.(*pveapi.Client)
+	data, ok := req.ProviderData.(*providerData)
 
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Provider Data Type",
-			fmt.Sprintf("Expected %T, got: %T. Please report this to the provider developers.", client, req.ProviderData),
+			fmt.Sprintf("Expected %T, got: %T. Please report this to the provider developers.", data, req.ProviderData),
 		)
 		return
 	}
 
-	r.client = client
+	r.client = data.client
+	r.vmids = data.vmids
 }
 
 func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -472,7 +474,7 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 
 	// run in a loop so we can retry if ID collision, not beautiful
 	for {
-		id, err := getIDToUse(plan.VMID, r.client)
+		id, err := r.vmids.IDFor(plan.VMID)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Determining VM ID",
@@ -490,6 +492,9 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 				if plan.VMID.IsUnknown() && re.MatchString(err.Error()) {
 					// if we tried creating with an auto-assigned ID try again
 					continue
+				}
+				if plan.VMID.IsUnknown() {
+					r.vmids.Release(id)
 				}
 
 				resp.Diagnostics.AddError(
@@ -527,6 +532,9 @@ func (r *vmResource) Create(ctx context.Context, req resource.CreateRequest, res
 				if plan.VMID.IsUnknown() && re.MatchString(err.Error()) {
 					// if we tried cloning with an auto-assigned ID try again
 					continue
+				}
+				if plan.VMID.IsUnknown() {
+					r.vmids.Release(id)
 				}
 
 				resp.Diagnostics.AddError(
@@ -674,13 +682,7 @@ func (r *vmResource) Update(ctx context.Context, req resource.UpdateRequest, res
 		return
 	}
 
-	id, err := getIDToUse(plan.VMID, r.client)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error Determining VM ID",
-			"Unexpected error when getting next free VM ID from the API. If you can't solve this error please report it to the provider developers.\n\n"+err.Error())
-		return
-	}
+	id := int(plan.VMID.ValueInt64())
 	vmr := pveapi.NewVmRef(id)
 	vmr.SetNode(plan.Node.ValueString())
 
@@ -1336,19 +1338,4 @@ func vmNetAPIConfigFromStateValue(ctx context.Context, o basetypes.ObjectValue) 
 	c := pveapi.QemuDevice{}
 	dm.writeToAPIConfig(&c)
 	return c, nil
-}
-
-func getIDToUse(v basetypes.Int64Value, client *pveapi.Client) (id int, err error) {
-	const initialVMID = 100
-
-	if !v.IsUnknown() {
-		id = int(v.ValueInt64())
-	} else {
-		id, err = client.GetNextID(initialVMID)
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	return id, nil
 }

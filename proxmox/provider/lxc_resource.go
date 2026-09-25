@@ -38,6 +38,7 @@ func NewLXCResource() resource.Resource {
 
 type lxcResource struct {
 	client *pveapi.Client
+	vmids  *vmidAllocator
 }
 
 type lxcResourceModel struct {
@@ -472,17 +473,18 @@ func (r *lxcResource) Configure(_ context.Context, req resource.ConfigureRequest
 		return
 	}
 
-	client, ok := req.ProviderData.(*pveapi.Client)
+	data, ok := req.ProviderData.(*providerData)
 
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Provider Data Type",
-			fmt.Sprintf("Expected %T, got: %T. Please report this to the provider developers.", client, req.ProviderData),
+			fmt.Sprintf("Expected %T, got: %T. Please report this to the provider developers.", data, req.ProviderData),
 		)
 		return
 	}
 
-	r.client = client
+	r.client = data.client
+	r.vmids = data.vmids
 }
 
 func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -506,7 +508,7 @@ func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	var vmr *pveapi.VmRef
 
 	for {
-		id, err := getIDToUse(plan.VMID, r.client)
+		id, err := r.vmids.IDFor(plan.VMID)
 		if err != nil {
 			resp.Diagnostics.AddError(
 				"Error Determining VM ID",
@@ -524,6 +526,9 @@ func (r *lxcResource) Create(ctx context.Context, req resource.CreateRequest, re
 			if plan.VMID.IsUnknown() && re.MatchString(err.Error()) {
 				// if we tried creating with an auto-assigned ID try again
 				continue
+			}
+			if plan.VMID.IsUnknown() {
+				r.vmids.Release(id)
 			}
 
 			resp.Diagnostics.AddError(
@@ -644,13 +649,7 @@ func (r *lxcResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	id, err := getIDToUse(plan.VMID, r.client)
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error Determining VM ID",
-			"Unexpected error when getting next free VM ID from the API. If you can't solve this error please report it to the provider developers.\n\n"+err.Error())
-		return
-	}
+	id := int(plan.VMID.ValueInt64())
 	vmr := pveapi.NewVmRef(id)
 	vmr.SetNode(plan.Node.ValueString())
 	vmr.SetVmType(vmTypeLxc)
