@@ -112,6 +112,7 @@ type virtioModel struct {
 	Format  types.String `tfsdk:"format"`
 	Size    types.Int64  `tfsdk:"size"`
 	Storage types.String `tfsdk:"storage"`
+	Discard types.Bool   `tfsdk:"discard"`
 }
 
 func (virtioModel) AttributeTypes() map[string]attr.Type {
@@ -120,6 +121,7 @@ func (virtioModel) AttributeTypes() map[string]attr.Type {
 		"format":  types.StringType,
 		"size":    types.Int64Type,
 		"storage": types.StringType,
+		"discard": types.BoolType,
 	}
 }
 
@@ -128,6 +130,7 @@ func (m *virtioModel) readFromAPIConfig(c *pveapi.QemuVirtIOStorage) {
 	m.Storage = types.StringValue(c.Disk.Storage)
 	m.Size = types.Int64Value(int64(c.Disk.SizeInKibibytes) / (1024 * 1024))
 	m.Format = types.StringValue(string(c.Disk.Format))
+	m.Discard = types.BoolValue(c.Disk.Discard)
 }
 
 func (m virtioModel) writeToAPIConfig(c *pveapi.QemuVirtIOStorage) {
@@ -135,6 +138,7 @@ func (m virtioModel) writeToAPIConfig(c *pveapi.QemuVirtIOStorage) {
 		Format:          pveapi.QemuDiskFormat(m.Format.ValueString()),
 		Storage:         m.Storage.ValueString(),
 		SizeInKibibytes: pveapi.QemuDiskSize(m.Size.ValueInt64() * 1024 * 1024),
+		Discard:         m.Discard.ValueBool(),
 	}
 }
 
@@ -374,6 +378,14 @@ func schemaVirtio() schema.Attribute {
 			"storage": schema.StringAttribute{
 				Description: "The storage identifier.",
 				Optional:    true,
+			},
+			"discard": schema.BoolAttribute{
+				Description: "Pass the guest's discard/TRIM requests to the storage, so thin pools get freed blocks back. Left unset, the disk keeps its current setting.",
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -914,7 +926,9 @@ func UpdateVMResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi.
 
 					interfaces, err := client.GetVmAgentNetworkInterfaces(vmr)
 					if err != nil {
-						if strings.Contains(err.Error(), "500 QEMU guest agent is not running") {
+						if strings.Contains(err.Error(), "500 QEMU guest agent is not running") ||
+							strings.Contains(err.Error(), "failed - got timeout") {
+							// a qmp timeout means the agent is up but the guest is still too busy booting to answer
 							time.Sleep(2 * time.Second)
 							continue
 						} else if strings.Contains(err.Error(), fmt.Sprintf("500 VM %d is not running", vmid)) {
