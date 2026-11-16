@@ -60,6 +60,7 @@ type lxcResourceModel struct {
 	SSHPublicKeys types.String `tfsdk:"ssh_public_keys"`
 
 	Memory types.Int64 `tfsdk:"memory"`
+	Swap   types.Int64 `tfsdk:"swap"`
 
 	RootFs types.Object `tfsdk:"rootfs"`
 
@@ -338,6 +339,14 @@ func (*lxcResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *re
 			},
 			"memory": schema.Int64Attribute{
 				Description: "Amount of RAM for the container in MB.",
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
+			},
+			"swap": schema.Int64Attribute{
+				Description: "Amount of swap for the container in MB.",
 				Optional:    true,
 				Computed:    true,
 				PlanModifiers: []planmodifier.Int64{
@@ -945,6 +954,7 @@ func UpdateLXCResourceModelFromAPI(ctx context.Context, vmid int, client *pveapi
 		model.Unprivileged = types.BoolValue(config.Unprivileged)
 
 		model.Memory = types.Int64Value(int64(config.Memory))
+		model.Swap = types.Int64Value(int64(config.Swap))
 
 		if len(config.Features) == 0 {
 			dm := featuresModel{}
@@ -1041,6 +1051,10 @@ func apiConfigFromLXCResourceModel(ctx context.Context, model *lxcResourceModel,
 
 	if !model.Memory.IsNull() && !model.Memory.IsUnknown() {
 		config.Memory = int(model.Memory.ValueInt64())
+	}
+
+	if !model.Swap.IsNull() && !model.Swap.IsUnknown() {
+		config.Swap = int(model.Swap.ValueInt64())
 	}
 
 	if !model.Unprivileged.IsNull() && !model.Unprivileged.IsUnknown() {
